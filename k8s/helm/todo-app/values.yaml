@@ -1,0 +1,137 @@
+## Frontend configuration
+frontend:
+  replicaCount: 1
+  image:
+    repository: todo-frontend
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 80
+  containerPort: 5173
+  dapr:
+    enabled: false
+    appId: frontend
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
+## Backend configuration
+backend:
+  replicaCount: 1
+  image:
+    repository: todo-backend
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 5006
+  containerPort: 5006
+  dapr:
+    enabled: false
+    appId: backend
+    appPort: 5006
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  livenessProbe:
+    path: /health
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    failureThreshold: 3
+  readinessProbe:
+    path: /ready
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    failureThreshold: 3
+  hpa:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilization: 70
+
+## AI Agent configuration
+aiAgent:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: todo-ai-agent
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 5000
+  containerPort: 5000
+  dapr:
+    enabled: false
+    appId: ai-agent
+    appPort: 5000
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+## PostgreSQL configuration
+postgres:
+  enabled: true
+  image:
+    repository: postgres
+    tag: "15-alpine"
+    pullPolicy: IfNotPresent
+  auth:
+    username: postgres
+    password: postgres
+    database: todo_app
+  service:
+    type: ClusterIP
+    port: 5432
+  containerPort: 5432
+  persistence:
+    enabled: true
+    size: 1Gi
+    storageClass: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+## Ingress configuration
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+  hosts:
+    - host: ""
+      paths:
+        - path: /api(/|$)(.*)
+          pathType: ImplementationSpecific
+          service: backend
+          port: 5006
+        - path: /(.*)
+          pathType: ImplementationSpecific
+          service: frontend
+          port: 80
+
+## Secrets configuration
+secrets:
+  enabled: false
+  todoAppSecrets: todo-app-secrets
+  kafkaCreds: kafka-creds
+
+## Namespace
+namespace: todo-app

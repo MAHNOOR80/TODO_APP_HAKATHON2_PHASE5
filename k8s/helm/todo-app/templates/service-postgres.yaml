@@ -1,0 +1,21 @@
+{{- if .Values.postgres.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: todo-app-postgres
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: todo-app-postgres
+    app.kubernetes.io/name: {{ .Chart.Name }}
+    app.kubernetes.io/component: database
+spec:
+  type: {{ .Values.postgres.service.type }}
+  ports:
+    - port: {{ .Values.postgres.service.port }}
+      targetPort: {{ .Values.postgres.containerPort }}
+      protocol: TCP
+      name: tcp-postgres
+  selector:
+    app: todo-app-postgres
+  clusterIP: None
+{{- end }}

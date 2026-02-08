@@ -1,0 +1,117 @@
+# Docker Compose Configuration for Todo Application
+# Phase 4: Cloud-Native Kubernetes Deployment
+#
+# Usage:
+#   Development: docker-compose up --build
+#   Production:  docker-compose -f docker-compose.yaml -f docker-compose.override.yaml up
+
+version: '3.8'
+
+services:
+  # Backend API Service
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: todo-backend
+    ports:
+      - "4000:4000"
+    environment:
+      - NODE_ENV=development
+      - PORT=4000
+      - DATABASE_URL=${DATABASE_URL}
+      - AUTH_SECRET=${AUTH_SECRET}
+      - LOG_LEVEL=info
+    depends_on:
+      - db
+    networks:
+      - todo-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  # Frontend UI Service
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: todo-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - VITE_API_BASE_URL=http://backend:4000
+    depends_on:
+      - backend
+    networks:
+      - todo-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  # AI Agent Service (Background Jobs)
+  ai-agent:
+    build:
+      context: ./ai-agent
+      dockerfile: Dockerfile
+    container_name: todo-ai-agent
+    ports:
+      - "5000:5000"
+    environment:
+      - NODE_ENV=development
+      - PORT=5000
+      - DATABASE_URL=${DATABASE_URL}
+      - BACKEND_URL=http://backend:4000
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - AGENT_INTERVAL_MS=300000
+      - SUGGESTION_RATE_LIMIT=10
+      - LOG_LEVEL=info
+    depends_on:
+      - backend
+    networks:
+      - todo-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  # PostgreSQL Database (for local development)
+  db:
+    image: postgres:15-alpine
+    container_name: todo-db
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=todo_app
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - todo-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+networks:
+  todo-network:
+    driver: bridge
+    name: todo-network
+
+volumes:
+  postgres_data:
+    name: todo-postgres-data

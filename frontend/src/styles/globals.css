@@ -1,0 +1,271 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Premium Global Styles for Todo App Phase 2 */
+
+@layer base {
+  :root {
+    /* Premium Color Palette - Dark/Navy Theme */
+    --color-primary: #6366f1;
+    --color-primary-light: #818cf8;
+    --color-primary-dark: #4f46e5;
+
+    --color-dark-bg: #0f172a;
+    --color-dark-surface: #1e293b;
+    --color-dark-elevated: #334155;
+
+    --color-text-primary: #f8fafc;
+    --color-text-secondary: #cbd5e1;
+    --color-text-muted: #94a3b8;
+
+    --color-success: #10b981;
+    --color-warning: #f59e0b;
+    --color-danger: #ef4444;
+    --color-info: #3b82f6;
+
+    --color-border: #334155;
+    --color-border-light: #475569;
+
+    /* Glassmorphism variables */
+    --glass-bg: rgba(30, 41, 59, 0.7);
+    --glass-border: rgba(148, 163, 184, 0.1);
+    --glass-shadow: rgba(0, 0, 0, 0.1);
+  }
+
+  * {
+    @apply border-dark-700;
+  }
+
+  html {
+    @apply scroll-smooth;
+  }
+
+  body {
+    @apply font-sans antialiased;
+    @apply bg-gradient-to-br from-dark-950 via-dark-900 to-dark-800;
+    @apply text-dark-50;
+    @apply min-h-screen;
+    @apply overflow-x-hidden;
+  }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    @apply w-2 h-2;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-dark-900;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-dark-600 rounded-full;
+    @apply hover:bg-dark-500;
+  }
+
+  /* Selection */
+  ::selection {
+    @apply bg-primary-500/30 text-primary-100;
+  }
+}
+
+@layer components {
+  /* Glassmorphism Card */
+  .glass-card {
+    @apply bg-dark-800/70 backdrop-blur-xl;
+    @apply border border-white/10;
+    @apply rounded-2xl;
+    @apply shadow-xl shadow-black/20;
+  }
+
+  .glass-card-hover {
+    @apply glass-card;
+    @apply transition-all duration-300 ease-out;
+    @apply hover:shadow-2xl hover:shadow-primary-500/10;
+    @apply hover:border-white/20;
+    @apply hover:-translate-y-0.5;
+  }
+
+  /* Neumorphism Card */
+  .neu-card {
+    @apply bg-dark-800;
+    @apply rounded-2xl;
+    @apply shadow-neu;
+    @apply transition-shadow duration-300;
+  }
+
+  .neu-card-hover {
+    @apply neu-card;
+    @apply hover:shadow-neu-lg;
+  }
+
+  /* Premium Gradient Text */
+  .gradient-text {
+    @apply bg-gradient-to-r from-primary-400 to-accent-purple;
+    @apply bg-clip-text text-transparent;
+  }
+
+  /* Premium Button Base */
+  .btn-base {
+    @apply inline-flex items-center justify-center;
+    @apply px-6 py-3 rounded-xl;
+    @apply font-medium text-sm;
+    @apply transition-all duration-200 ease-out;
+    @apply focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-dark-900;
+    @apply disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply min-h-[44px] min-w-[44px];
+  }
+
+  .btn-primary {
+    @apply btn-base;
+    @apply bg-gradient-to-r from-primary-600 to-primary-500;
+    @apply text-white shadow-lg shadow-primary-500/30;
+    @apply hover:shadow-xl hover:shadow-primary-500/40;
+    @apply hover:scale-105;
+    @apply active:scale-95;
+    @apply focus:ring-primary-500;
+  }
+
+  .btn-secondary {
+    @apply btn-base;
+    @apply bg-dark-700 border border-dark-600;
+    @apply text-dark-100;
+    @apply hover:bg-dark-600 hover:border-dark-500;
+    @apply focus:ring-dark-500;
+  }
+
+  .btn-danger {
+    @apply btn-base;
+    @apply bg-gradient-to-r from-red-600 to-red-500;
+    @apply text-white shadow-lg shadow-red-500/30;
+    @apply hover:shadow-xl hover:shadow-red-500/40;
+    @apply hover:scale-105;
+    @apply active:scale-95;
+    @apply focus:ring-red-500;
+  }
+
+  .btn-ghost {
+    @apply btn-base;
+    @apply bg-transparent;
+    @apply text-dark-300;
+    @apply hover:bg-dark-800 hover:text-dark-100;
+    @apply focus:ring-dark-600;
+  }
+
+  /* Premium Input */
+  .input-base {
+    @apply w-full px-4 py-3 rounded-xl;
+    @apply bg-dark-800/50 backdrop-blur-sm;
+    @apply border border-dark-600;
+    @apply text-dark-50 placeholder:text-dark-400;
+    @apply transition-all duration-200;
+    @apply focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent;
+    @apply hover:border-dark-500;
+  }
+
+  /* Badge Styles */
+  .badge-base {
+    @apply inline-flex items-center px-3 py-1 rounded-lg;
+    @apply text-xs font-medium;
+    @apply transition-all duration-200;
+  }
+
+  .badge-high {
+    @apply badge-base;
+    @apply bg-red-500/20 text-red-400 border border-red-500/30;
+  }
+
+  .badge-medium {
+    @apply badge-base;
+    @apply bg-yellow-500/20 text-yellow-400 border border-yellow-500/30;
+  }
+
+  .badge-low {
+    @apply badge-base;
+    @apply bg-blue-500/20 text-blue-400 border border-blue-500/30;
+  }
+
+  .badge-tag {
+    @apply badge-base;
+    @apply bg-primary-500/20 text-primary-400 border border-primary-500/30;
+    @apply hover:bg-primary-500/30 hover:scale-105;
+  }
+
+  /* Loading Spinner */
+  .spinner {
+    @apply animate-spin rounded-full;
+    @apply border-2 border-dark-600;
+    @apply border-t-primary-500;
+  }
+
+  /* Empty State */
+  .empty-state {
+    @apply flex flex-col items-center justify-center;
+    @apply py-16 px-4;
+    @apply text-center;
+  }
+}
+
+@layer utilities {
+  /* Animations */
+  .animate-glow {
+    animation: glow 2s ease-in-out infinite;
+  }
+
+  @keyframes glow {
+    0%, 100% {
+      box-shadow: 0 0 20px rgba(99, 102, 241, 0.3);
+    }
+    50% {
+      box-shadow: 0 0 30px rgba(99, 102, 241, 0.5);
+    }
+  }
+
+  /* Text Utilities */
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  /* Custom Grid */
+  .grid-auto-fill {
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  }
+
+  .grid-auto-fit {
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  }
+}
+
+/* Accessibility - Enhanced focus states */
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  @apply outline-none ring-2 ring-primary-500 ring-offset-2 ring-offset-dark-900;
+}
+
+/* Print Styles */
+@media print {
+  body {
+    @apply bg-white text-black;
+  }
+
+  .no-print {
+    @apply hidden;
+  }
+}
+
+/* Reduced Motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

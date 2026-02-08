@@ -1,0 +1,2328 @@
+================================================================================
+                    TODO APP PHASE 5 - PROJECT DOCUMENTATION
+================================================================================
+
+PROJECT OVERVIEW
+--------------------------------------------------------------------------------
+This is a production-ready, full-stack Todo Application (Phase 5) built with
+modern cloud-native architecture. It evolved from a CLI application to a
+complete web-based SaaS with authentication, persistent storage, responsive UI,
+autonomous AI agents, and reactive event-driven architecture using Dapr.
+
+Project Phase: Phase 5 - Reactive AI Agents with Dapr Event-Driven Architecture
+Version: 2.0.0 (Backend/Frontend), 1.0.0 (AI Agent)
+Status: Phase 1-9 ~98% complete
+
+================================================================================
+                           ARCHITECTURE OVERVIEW
+================================================================================
+
+The application follows a 3-tier microservice architecture running on Kubernetes with Dapr for event-driven communication:
+
+    +-----------------------------------------------------------+
+    |                  Kubernetes Cluster                        |
+    |                                                            |
+    |  +-------------+    +--------------+    +--------------+   |
+    |  |  Frontend   |--->|   Backend    |<---|  AI Agent    |   |
+    |  |  (React)    |    |  (Express)   |    |  (cron jobs) |   |
+    |  +-------------+    +------+-------+    +--------------+   |
+    |        |                   |                               |
+    |        +-------------------+-------------------------------+
+    |                            |                               |
+    |                    +-------v--------+                      |
+    |                    |  PostgreSQL    |                      |
+    |                    |  (Neon SaaS)   |                      |
+    |                    +----------------+                      |
+    |                                                            |
+    |  Ingress (nginx)                                           |
+    |  Dapr Sidecar                                              |
+    +-----------------------------------------------------------+
+
+With Dapr pub/sub for reactive task lifecycle management.
+
+================================================================================
+                            TECHNOLOGY STACK
+================================================================================
+
+BACKEND
+-------
+- Language: TypeScript 5+
+- Runtime: Node.js 20+ LTS
+- Framework: Express.js (5.2.1)
+- Database: PostgreSQL (Neon Serverless) via Prisma ORM (5.7.1)
+- Authentication: Session-based with httpOnly cookies + bcrypt
+- Validation: Custom middleware and Zod-like validation
+- AI Integration: OpenRouter/OpenAI API
+- Event System: Dapr (Distributed Application Runtime) with Kafka pub/sub
+- Scheduling: node-cron (3.0.3) for background jobs
+- Logging: Pino (8.17.2) for structured logging
+- Rate Limiting: Custom rate limiter
+- Testing: Jest + Supertest
+- Security: bcrypt (6.0.0) for password hashing, CORS enabled
+
+FRONTEND
+--------
+- Language: TypeScript 5+
+- Framework: React 18+ with Hooks and Context API
+- Build Tool: Vite (5.0.8)
+- Styling: Tailwind CSS (3.4.0)
+- Routing: React Router (6.21.1)
+- Animation: Framer Motion (12.23.26)
+- Icons: Lucide React (0.562.0)
+- Testing: Vitest + React Testing Library
+- UI Components: Custom component library (Button, Input, Modal, etc.)
+
+AI AGENT SERVICE
+----------------
+- Language: TypeScript 5+
+- Runtime: Node.js 20+ LTS
+- Database Access: Prisma Client (5.7.1)
+- HTTP Client: Axios (1.6.2)
+- Scheduling: node-cron (3.0.3)
+- Event System: Dapr client for pub/sub
+- Logging: Pino (8.17.2)
+
+INFRASTRUCTURE
+--------------
+- Containerization: Docker (multi-stage builds)
+- Orchestration: Kubernetes (via Minikube for local dev)
+- Configuration: Kustomize for environment overlays
+- Database: PostgreSQL 15 (Alpine in compose)
+- Reverse Proxy: Nginx (in Kubernetes Ingress)
+- Event Streaming: Dapr with Kafka
+
+================================================================================
+                            PROJECT STRUCTURE
+================================================================================
+
+TODO_APP_PHASE5/
+|
++-- backend/                         # REST API Server
+|   +-- src/
+|   |   +-- config/                 # Database, auth, logger, AI, Dapr config
+|   |   +-- controllers/            # Health, suggestions, user prefs
+|   |   +-- ai/                     # AI Agent with OpenAI integration
+|   |   +-- middleware/             # Auth, validation, error, logging, correlation
+|   |   +-- models/                 # TypeScript interfaces
+|   |   +-- repositories/           # Prisma-based data access layer
+|   |   +-- routes/                 # API endpoints
+|   |   +-- services/               # Business logic
+|   |   +-- types/                  # Shared TypeScript types
+|   |   +-- utils/                  # Helper functions
+|   |   +-- validators/             # Validation schemas
+|   |   +-- events/                 # Event publishing and handling
+|   |   +-- index.ts                # Express server entry point
+|   +-- prisma/                     # Database schema
+|   +-- tests/                      # Backend test suite
+|   +-- Dockerfile                  # Multi-stage build
+|   +-- package.json
+|   +-- tsconfig.json
+|
++-- frontend/                        # React SPA UI
+|   +-- src/
+|   |   +-- components/             # Reusable UI components
+|   |   |   +-- Button, Input, Modal, Spinner, Toast
+|   |   |   +-- TaskItem, TaskList, TaskFilters
+|   |   |   +-- ChatMessage, FloatingChatbot
+|   |   |   +-- ProtectedRoute
+|   |   |   +-- homepage/           # Landing page components
+|   |   +-- containers/             # Data-fetching containers
+|   |   +-- pages/                  # Page components
+|   |   +-- context/                # React Context (Auth provider)
+|   |   +-- hooks/                  # Custom React hooks
+|   |   +-- services/               # API client services
+|   |   +-- types/                  # TypeScript type definitions
+|   |   +-- utils/                  # Helper functions
+|   |   +-- styles/                 # Global CSS and Tailwind
+|   |   +-- App.tsx                 # Root component
+|   |   +-- main.tsx                # Vite entry point
+|   +-- tests/                      # Frontend test suite
+|   +-- Dockerfile                  # Nginx-based production server
+|   +-- package.json
+|   +-- vite.config.ts
+|
++-- ai-agent/                        # Autonomous AI Suggestion Service
+|   +-- src/
+|   |   +-- agents/                 # Autonomous agents
+|   |   +-- config/                 # Database, logger, OpenAI config
+|   |   +-- services/               # Business logic
+|   |   +-- utils/                  # Helper functions
+|   |   +-- events/                 # Event handling with Dapr
+|   |   +-- index.ts                # Main entry point
+|   |   +-- scheduler.ts            # Cron job scheduler
+|   +-- Dockerfile
+|   +-- package.json
+|
++-- k8s/                             # Kubernetes manifests
+|   +-- base/                       # Base configurations
+|   |   +-- backend/                # Backend deployment, service, HPA
+|   |   +-- frontend/               # Frontend deployment, service, HPA
+|   |   +-- ai-agent/               # AI agent deployment, service
+|   |   +-- configmap.yaml
+|   |   +-- namespace.yaml
+|   |   +-- ingress.yaml            # Nginx ingress
+|   +-- overlays/
+|   |   +-- development/            # Dev environment overrides
+|   |   +-- minikube/               # Minikube-specific configs
+|   +-- secrets/                    # Secret management templates
+|
++-- specs/                           # Feature specifications
+|   +-- 001-todo-cli/               # Phase 1: CLI Foundation
+|   +-- 002-intermediate-level/     # Phase 2: Priorities and Tags
+|   +-- 003-advanced-level/         # Phase 3: Due dates and Recurring
+|   +-- 004-fullstack-todo-web-app/ # Phase 4: Web Application
+|   +-- 005-premium-homepage/       # Phase 5: Landing Page
+|   +-- 006-ai-todo-assistant/      # Phase 6: AI Assistant
+|   +-- 007-cloud-native-k8s/       # Phase 7: Kubernetes
+|   +-- 008-reactive-ai-agents/     # Phase 8: Reactive AI with Dapr
+|
++-- .specify/                        # SpecKit Plus framework
+|   +-- memory/                     # Project constitution
+|   +-- templates/                  # PHR and spec templates
+|
++-- docker-compose.yaml             # Local development setup
++-- CLAUDE.md                        # AI assistant guidelines
++-- README.md                        # Project documentation
++-- DEPLOYMENT.md                    # Kubernetes deployment guide
+
+================================================================================
+                              CORE FEATURES
+================================================================================
+
+1. AUTHENTICATION AND USER MANAGEMENT
+   - User signup/signin with email/password
+   - Session-based authentication (httpOnly cookies)
+   - User profile management
+   - Password hashing with bcrypt
+   - CSRF protection enabled
+
+2. TASK MANAGEMENT (Full CRUD)
+   - Create: Add tasks with title, description, priority, tags, due dates
+   - Read: View tasks with filtering, sorting, searching
+   - Update: Modify task details, mark complete/incomplete
+   - Delete: Remove tasks (with confirmation)
+
+3. ADVANCED TASK FEATURES
+   - Priority Levels: Low, Medium, High
+   - Tags: Multiple tags per task for organization
+   - Due Dates: Set deadlines with overdue detection
+   - Categories: Work, Personal, Health, Finance, Education
+   - Recurring Tasks: Daily, weekly, monthly patterns
+   - Task Reminders: Browser notifications
+   - Search and Filter: Full-text search, filter by completion, priority, tag
+   - Sorting: By title, priority, or due date
+
+4. AI-POWERED TODO ASSISTANT
+   - Natural Language Interface: "Add a task to buy groceries tomorrow"
+   - Intent Recognition: Automatic detection of operations
+   - Context Awareness: Multi-turn conversations with session history
+   - Safety Features: Confirmation for destructive operations
+   - Chat History: Persistent conversation storage
+   - OpenAI Integration: GPT-based intent processing
+
+5. AUTONOMOUS AI SUGGESTIONS
+   - Overdue Task Reminders: Automatic notifications
+   - Priority Recommendations: AI suggests priority adjustments
+   - Task Insights: General recommendations based on patterns
+   - Scheduled Jobs: Cron-based background processing
+   - User Preference Control: Enable/disable autonomous agents
+   - Dismissible Notifications
+   - Event-Driven: Reacts to task lifecycle events via Dapr
+
+6. EVENT-DRIVEN ARCHITECTURE WITH DAPR
+   - Task Lifecycle Events: Created, Updated, Deleted, Completed, Incomplete
+   - Dapr Pub/Sub: Kafka-based event streaming
+   - Reactive Agents: Respond to events in real-time
+   - Dead Letter Queue: Failed event handling with retry logic
+   - Distributed Tracing: Request correlation across services
+
+7. CLOUD-NATIVE DEPLOYMENT
+   - Docker Containerization: Multi-stage builds
+   - Kubernetes Ready: Deployments, services, ingress
+   - Horizontal Pod Autoscaling
+   - Health Checks: Liveness and readiness probes
+   - Graceful Shutdown: SIGTERM/SIGINT handling
+   - Kustomize Configuration: Environment overlays
+
+================================================================================
+                            DATABASE SCHEMA
+================================================================================
+
+MODELS:
+
+1. User - Core user account
+   - Fields: id, email, name, password, createdAt, updatedAt, autonomousAgentsEnabled
+   - Relations: tasks, conversations, agentSuggestions
+
+2. Task - Todo items with full metadata
+   - Fields: id, userId, title, description, completed, priority, tags,
+             category, dueDate, recurrencePattern, reminder settings
+   - Indexes: userId, dueDate, completed, userId+priority
+   - Relations: user, agentSuggestions
+
+3. Conversation - Chat sessions with AI
+   - Fields: id, userId, title, timestamps
+   - Relations: user, messages
+
+4. ChatMessage - Individual messages
+   - Fields: id, conversationId, role (user/assistant), content, timestamp
+   - Relations: conversation
+
+5. AgentSuggestion - AI recommendations
+   - Fields: id, userId, taskId, suggestionType, message, metadata, dismissed
+   - Types: overdue_reminder, prioritization, schedule_adjustment,
+            neglected_task, general_insight
+   - Relations: user, task
+
+================================================================================
+                              API ENDPOINTS
+================================================================================
+
+AUTHENTICATION (/api/v1/auth/)
+------------------------------
+POST /signup         - Create new account
+POST /signin         - Login
+POST /signout        - Logout
+
+TASKS (/api/v1/tasks/)
+----------------------
+GET /                - List user tasks (with search, filter, sort)
+POST /               - Create task
+GET /:id             - Get specific task
+PUT /:id             - Update task
+DELETE /:id          - Delete task
+PATCH /:id/complete  - Mark complete
+PATCH /:id/incomplete - Mark incomplete
+GET /reminders       - Get tasks with active reminders
+
+AI CHAT (/api/v1/ai/)
+---------------------
+POST /chat                  - Process natural language commands
+GET /conversations          - Get chat history
+GET /conversations/:id      - Get conversation details
+DELETE /conversations/:id   - Delete conversation
+
+SUGGESTIONS (/api/v1/suggestions/)
+----------------------------------
+GET /                       - Get active suggestions
+PATCH /:id/dismiss          - Dismiss a suggestion
+
+USER PREFERENCES (/api/v1/user-preferences/)
+--------------------------------------------
+GET /                                    - Get user preferences
+PUT /autonomous-agents                   - Enable/disable autonomous agents
+
+HEALTH
+------
+GET /health                 - Health check endpoint
+GET /ready                  - Readiness probe
+
+DAPR EVENTS (/dapr/)
+--------------------
+GET /subscribe            - Dapr subscription registration
+POST /events/tasks-lifecycle - Receive task lifecycle events
+
+================================================================================
+                         SECURITY MEASURES
+================================================================================
+
+- Session-based auth with httpOnly cookies
+- Password hashing with bcrypt
+- Input validation on all endpoints
+- SQL injection prevention (Prisma parameterized queries)
+- XSS protection (output sanitization)
+- CORS with explicit origin whitelist
+- Rate limiting on AI endpoints
+- User data isolation (all queries filtered by userId)
+- Dapr service invocation for secure inter-service communication
+- Request correlation IDs for distributed tracing
+
+================================================================================
+                        MIDDLEWARE STACK
+================================================================================
+
+1. CORS - Configured for specific origins
+2. Request ID - Unique identifier for request tracing
+3. Correlation ID - Track requests across services
+4. Structured Logging - Request/response logging with Pino
+5. Authentication - Verify session and extract userId
+6. Validation - Schema validation on all endpoints
+7. AI Security - Rate limiting, input/output sanitization
+8. Error Handling - Global error handler with proper HTTP codes
+
+================================================================================
+                          DEPLOYMENT
+================================================================================
+
+LOCAL DEVELOPMENT:
+  docker-compose up --build
+  Services: backend (4000), frontend (3000), ai-agent (5000), db (5432)
+
+KUBERNETES (MINIKUBE):
+  minikube start --cpus=4 --memory=8192
+  kubectl apply -k k8s/overlays/development
+  Resources deployed in todo-app namespace
+
+PRODUCTION:
+- Neon PostgreSQL (serverless, auto-scaling)
+- Kubernetes with HPA for auto-scaling
+- Nginx Ingress for routing
+- Environment-specific ConfigMaps and Secrets
+- Multi-stage Docker builds
+- Dapr sidecars for pub/sub and service invocation
+
+================================================================================
+                       PERFORMANCE TARGETS
+================================================================================
+
+- Page load: <2s for 500 tasks
+- Search/filter: <1s for 1,000 tasks
+- Task creation: <10s end-to-end
+- API response: <200ms p95
+- Bundle size: <500KB gzipped
+- Supports 100 concurrent authenticated users
+- Handles up to 10,000 tasks per user
+- Event processing: <500ms from event to suggestion
+
+================================================================================
+                         PROJECT STATUS
+================================================================================
+
+PHASES COMPLETED (9/10):
+  [X] Phase 1: CLI Foundation
+  [X] Phase 2: Intermediate Features (Priorities and Tags)
+  [X] Phase 3: Advanced Features (Due dates and Recurring)
+  [X] Phase 4: Web Application
+  [X] Phase 5: Homepage
+  [X] Phase 6: AI Assistant
+  [X] Phase 7: Cloud-Native K8s
+  [X] Phase 8: Reactive AI Agents with Dapr
+  [ ] Phase 9: Polish/Testing (In Progress)
+  [ ] Phase 10: (Planned)
+
+================================================================================
+                       DEVELOPMENT STATS
+================================================================================
+
+- Backend Source Files: 50+ TypeScript files
+- Frontend Source Files: 46+ TypeScript/TSX files
+- AI Agent Source Files: 15+ TypeScript files
+- Total Microservices: 3 (backend, frontend, ai-agent)
+- Database Models: 5 core entities
+- API Endpoints: 25+ endpoints
+- Test Suites: Backend (Jest) and Frontend (Vitest)
+- Implementation Progress: ~98% complete
+
+================================================================================
+                     KEY TECHNICAL DECISIONS
+================================================================================
+
+1. Layered Backend Architecture
+   - Clear separation between routes, services, and repositories
+
+2. TypeScript Strict Mode
+   - All services enforce strict TypeScript compilation
+
+3. Prisma ORM
+   - Type-safe database access with auto-generated client
+
+4. React Context API
+   - Simple state management without Redux complexity
+
+5. Container-First Design
+   - All services containerized from the start
+
+6. Kubernetes Native
+   - Infrastructure as code using Kustomize
+
+7. OpenAI Function Calling
+   - AI agent uses structured tool schemas
+
+8. Session-Based Auth
+   - Simple but secure authentication without JWT
+
+9. Dapr Event-Driven Architecture
+   - Reactive agents responding to task lifecycle events
+
+10. Distributed Tracing
+   - Request correlation IDs across service boundaries
+
+================================================================================
+                       INTEGRATION POINTS
+================================================================================
+
+- Frontend <-> Backend: REST API via Axios with CORS
+- Frontend <-> AI Chat: WebSocket-ready via conversationId tracking
+- AI Agent <-> Backend: HTTP calls for suggestions and Dapr pub/sub for events
+- All Services <-> Database: Prisma client with connection pooling
+- Frontend <-> Kubernetes: Service discovery via environment variables
+- Services <-> Dapr: Sidecar pattern for pub/sub and service invocation
+
+================================================================================
+                     COMPLETE SOURCE CODE
+================================================================================
+
+=== FILE: backend/src/index.ts ===
+import express from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+import 'dotenv/config';
+import { connectToDatabase } from './config/database.config';
+import { setupAuth } from './config/auth.config';
+import { setupAI } from './config/ai.config';
+import { setupLogger } from './config/logger.config';
+import { setupDapr } from './config/dapr.config';
+import { errorHandler } from './middleware/error.middleware';
+import { requestLogger } from './middleware/logger.middleware';
+import { requestIdMiddleware } from './middleware/request-id.middleware';
+import { correlationMiddleware } from './middleware/correlation.middleware';
+import { rateLimiter } from './utils/rate-limiter';
+import routes from './routes';
+
+const app = express();
+const PORT = process.env.PORT || 5004;
+
+// Middleware
+app.use(helmet());
+app.use(cors({
+  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  credentials: true
+}));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Request tracking
+app.use(requestIdMiddleware);
+app.use(correlationMiddleware);
+app.use(requestLogger);
+
+// Rate limiting
+app.use(rateLimiter);
+
+// Routes
+app.use('/api/v1', routes);
+
+// Error handling
+app.use(errorHandler);
+
+// Graceful shutdown
+const server = app.listen(PORT, async () => {
+  console.log(`Server running on port ${PORT}`);
+  await connectToDatabase();
+  await setupAuth();
+  await setupAI();
+  await setupLogger();
+  await setupDapr();
+});
+
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received, shutting down gracefully');
+  server.close(() => {
+    console.log('Process terminated');
+  });
+});
+
+process.on('SIGINT', () => {
+  console.log('SIGINT received, shutting down gracefully');
+  server.close(() => {
+    console.log('Process terminated');
+  });
+});
+
+export default app;
+
+=== END FILE ===
+
+=== FILE: backend/src/config/database.config.ts ===
+import { PrismaClient } from '@prisma/client';
+import { logger } from './logger.config';
+
+let prisma: PrismaClient;
+
+declare global {
+  var prisma: PrismaClient | undefined;
+}
+
+export async function connectToDatabase() {
+  if (process.env.NODE_ENV === 'production') {
+    prisma = new PrismaClient();
+  } else {
+    if (!global.prisma) {
+      global.prisma = new PrismaClient();
+    }
+    prisma = global.prisma;
+  }
+
+  try {
+    await prisma.$connect();
+    logger.info('Connected to database successfully');
+  } catch (error) {
+    logger.error('Failed to connect to database:', error);
+    process.exit(1);
+  }
+}
+
+export function getPrismaClient() {
+  if (!prisma) {
+    throw new Error('Prisma client not initialized');
+  }
+  return prisma;
+}
+
+export async function getDatabaseStatus() {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    return { connected: true };
+  } catch (error) {
+    return { connected: false, error };
+  }
+}
+
+=== END FILE ===
+
+=== FILE: backend/src/config/dapr.config.ts ===
+import { DaprClient, DaprPubSubTopic, DaprPubSubSubscription } from '@dapr/dapr';
+
+// Dapr configuration
+export const DAPR_HTTP_ENDPOINT = process.env.DAPR_HTTP_ENDPOINT || 'http://localhost:3500';
+export const DAPR_GRPC_ENDPOINT = process.env.DAPR_GRPC_ENDPOINT || 'localhost:50001';
+export const PUBSUB_NAME = process.env.DAPR_PUBSUB_NAME || 'pubsub-kafka';
+export const TOPIC_NAME = process.env.DAPR_TOPIC_NAME || 'tasks-lifecycle';
+
+let daprClient: DaprClient;
+
+export function getDaprClient(): DaprClient {
+  if (!daprClient) {
+    daprClient = new DaprClient({
+      daprHost: DAPR_HTTP_ENDPOINT.split(':')[1].replace('//', ''),
+      daprPort: DAPR_HTTP_ENDPOINT.split(':')[2] || '3500',
+      communicationMethod: 'http',
+    });
+  }
+  return daprClient;
+}
+
+// Initialize Dapr client
+export async function initializeDapr() {
+  try {
+    const client = getDaprClient();
+
+    // Test connection
+    await client.client.discover();
+
+    console.log('Dapr client initialized successfully');
+  } catch (error) {
+    console.error('Failed to initialize Dapr client:', error);
+    process.exit(1);
+  }
+}
+
+=== END FILE ===
+
+=== FILE: backend/src/routes/index.ts ===
+import { Router } from 'express';
+import authRoutes from './auth.routes';
+import taskRoutes from './tasks.routes';
+import aiRoutes from './ai.routes';
+import healthRoutes from './health.routes';
+import userPreferencesRoutes from './user-preferences.routes';
+import suggestionsRoutes from './suggestions.routes';
+import daprRoutes from './dapr.routes';
+
+const router = Router();
+
+router.use('/auth', authRoutes);
+router.use('/tasks', taskRoutes);
+router.use('/ai', aiRoutes);
+router.use('/health', healthRoutes);
+router.use('/user-preferences', userPreferencesRoutes);
+router.use('/suggestions', suggestionsRoutes);
+router.use('/dapr', daprRoutes);
+
+export default router;
+
+=== END FILE ===
+
+=== FILE: backend/src/routes/tasks.routes.ts ===
+import { Router } from 'express';
+import {
+  getAllTasks,
+  getTaskById,
+  createTask,
+  updateTask,
+  deleteTask,
+  markComplete,
+  markIncomplete
+} from '../controllers/tasks.controller';
+import { authenticateToken } from '../middleware/auth.middleware';
+import { validateTask } from '../validators/task.validator';
+
+const router = Router();
+
+router.use(authenticateToken);
+
+router.get('/', getAllTasks);
+router.post('/', validateTask, createTask);
+router.get('/:id', getTaskById);
+router.put('/:id', validateTask, updateTask);
+router.delete('/:id', deleteTask);
+router.patch('/:id/complete', markComplete);
+router.patch('/:id/incomplete', markIncomplete);
+
+export default router;
+
+=== END FILE ===
+
+=== FILE: backend/src/routes/dapr.routes.ts ===
+import { Router } from 'express';
+import { handleTaskLifecycleEvent } from '../controllers/dapr.controller';
+
+const router = Router();
+
+// Dapr subscription endpoint
+router.get('/subscribe', (_req, res) => {
+  res.json([
+    {
+      pubsubname: process.env.DAPR_PUBSUB_NAME || 'pubsub-kafka',
+      topic: process.env.DAPR_TOPIC_NAME || 'tasks-lifecycle',
+      route: '/dapr/events/tasks-lifecycle',
+    },
+  ]);
+});
+
+// Event handler endpoint
+router.post('/events/tasks-lifecycle', handleTaskLifecycleEvent);
+
+export default router;
+
+=== END FILE ===
+
+=== FILE: backend/src/middleware/correlation.middleware.ts ===
+import { Request, Response, NextFunction } from 'express';
+
+declare global {
+  namespace Express {
+    interface Request {
+      correlationId?: string;
+    }
+  }
+}
+
+export const correlationMiddleware = (req: Request, res: Response, next: NextFunction) => {
+  // Get correlation ID from header or generate new one
+  const correlationId = req.headers['x-correlation-id'] as string ||
+                       req.headers['x-request-id'] as string ||
+                       generateCorrelationId();
+
+  req.correlationId = correlationId;
+  res.setHeader('X-Correlation-ID', correlationId);
+
+  next();
+};
+
+function generateCorrelationId(): string {
+  return `corr_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+}
+
+export const CORRELATION_ID_HEADER = 'x-correlation-id';
+
+=== END FILE ===
+
+=== FILE: backend/src/services/task.service.ts ===
+import { PrismaClient, Task, User } from '@prisma/client';
+import { getPrismaClient } from '../config/database.config';
+import { TaskWithRelations } from '../models/task.model';
+import { calculateNextDueDate, isOverdue } from '../utils/date.utils';
+import { RecurrencePattern } from '../models/types';
+import { publishEvent } from '../events/publisher';
+import { TaskEventType } from '../events/event-types';
+
+const prisma = getPrismaClient();
+
+export interface TaskFilters {
+  search?: string;
+  completed?: boolean;
+  priority?: string;
+  tag?: string;
+  sort?: string;
+  order?: string;
+}
+
+export async function getAllTasks(userId: string, filters?: TaskFilters): Promise<TaskWithRelations[]> {
+  const whereClause: any = { userId };
+
+  // Apply filters
+  if (filters?.search) {
+    whereClause.OR = [
+      { title: { contains: filters.search, mode: 'insensitive' } },
+      { description: { contains: filters.search, mode: 'insensitive' } },
+    ];
+  }
+
+  if (filters?.completed !== undefined) {
+    whereClause.completed = filters.completed;
+  }
+
+  if (filters?.priority) {
+    whereClause.priority = filters.priority;
+  }
+
+  if (filters?.tag) {
+    whereClause.tags = { has: filters.tag };
+  }
+
+  // Determine sort field and order
+  let orderBy: any = { createdAt: 'desc' }; // Default sorting
+  if (filters?.sort) {
+    const sortField = filters.sort;
+    const sortOrder = (filters.order || 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc';
+
+    // Map sort field to actual database field
+    const fieldMap: { [key: string]: string } = {
+      title: 'title',
+      priority: 'priority',
+      dueDate: 'dueDate',
+      createdAt: 'createdAt',
+      updatedAt: 'updatedAt',
+    };
+
+    if (fieldMap[sortField]) {
+      orderBy = { [fieldMap[sortField]]: sortOrder };
+    }
+  }
+
+  const tasks = await prisma.task.findMany({
+    where: whereClause,
+    orderBy,
+  });
+
+  // Add computed properties
+  return tasks.map(task => ({
+    ...task,
+    isOverdue: isOverdue(new Date(task.dueDate!), task.completed),
+  }));
+}
+
+export async function getTaskById(id: string, userId: string): Promise<TaskWithRelations | null> {
+  const task = await prisma.task.findUnique({
+    where: { id, userId },
+  });
+
+  if (!task) {
+    return null;
+  }
+
+  return {
+    ...task,
+    isOverdue: isOverdue(new Date(task.dueDate!), task.completed),
+  };
+}
+
+export async function createTask(userId: string, data: Partial<Task>): Promise<Task> {
+  const task = await prisma.task.create({
+    data: {
+      ...data,
+      userId,
+      tags: data.tags || [],
+      dueDate: data.dueDate ? new Date(data.dueDate) : null,
+    },
+  });
+
+  // Publish event
+  await publishEvent({
+    eventType: TaskEventType.CREATED,
+    taskId: task.id,
+    userId: task.userId,
+    correlationId: '', // Will be set by middleware
+    timestamp: new Date().toISOString(),
+    title: task.title,
+    priority: task.priority,
+    dueDate: task.dueDate?.toISOString() || null,
+    recurring: !!task.recurrencePattern,
+  });
+
+  return task;
+}
+
+export async function updateTask(id: string, userId: string, data: Partial<Task>): Promise<Task | null> {
+  // First check if the task exists and belongs to the user
+  const existingTask = await prisma.task.findUnique({
+    where: { id, userId },
+  });
+
+  if (!existingTask) {
+    return null;
+  }
+
+  // Prepare update data
+  const updateData: Partial<Task> = { ...data };
+
+  // Handle tags separately to ensure they're properly formatted
+  if (data.tags !== undefined) {
+    updateData.tags = data.tags;
+  }
+
+  // Convert dueDate to proper format if provided
+  if (data.dueDate !== undefined) {
+    updateData.dueDate = data.dueDate ? new Date(data.dueDate) : null;
+  }
+
+  const updatedTask = await prisma.task.update({
+    where: { id },
+    data: updateData,
+  });
+
+  // Publish event
+  await publishEvent({
+    eventType: TaskEventType.UPDATED,
+    taskId: updatedTask.id,
+    userId: updatedTask.userId,
+    correlationId: '', // Will be set by middleware
+    timestamp: new Date().toISOString(),
+    changes: {
+      ...data, // Include the changes that were made
+    },
+  });
+
+  return updatedTask;
+}
+
+export async function deleteTask(id: string, userId: string): Promise<boolean> {
+  const result = await prisma.task.deleteMany({
+    where: { id, userId },
+  });
+
+  if (result.count > 0) {
+    // Publish event
+    await publishEvent({
+      eventType: TaskEventType.DELETED,
+      taskId: id,
+      userId,
+      correlationId: '', // Will be set by middleware
+      timestamp: new Date().toISOString(),
+    });
+    return true;
+  }
+
+  return false;
+}
+
+export async function markTaskComplete(id: string, userId: string): Promise<Task | null> {
+  const existingTask = await prisma.task.findUnique({
+    where: { id, userId },
+  });
+
+  if (!existingTask) {
+    return null;
+  }
+
+  // If it's a recurring task, create a new instance instead of updating the current one
+  if (existingTask.recurrencePattern) {
+    const nextDueDate = calculateNextDueDate(
+      new Date(existingTask.dueDate!),
+      existingTask.recurrencePattern as RecurrencePattern
+    );
+
+    // Create a new task with the next due date
+    const newTask = await prisma.task.create({
+      data: {
+        userId: existingTask.userId,
+        title: existingTask.title,
+        description: existingTask.description,
+        priority: existingTask.priority,
+        tags: existingTask.tags,
+        category: existingTask.category,
+        dueDate: nextDueDate,
+        recurrencePattern: existingTask.recurrencePattern,
+        reminderEnabled: existingTask.reminderEnabled,
+        reminderOffsetMinutes: existingTask.reminderOffsetMinutes,
+      },
+    });
+
+    // Mark the original task as complete
+    const completedTask = await prisma.task.update({
+      where: { id },
+      data: { completed: true },
+    });
+
+    // Publish completion event for the original task
+    await publishEvent({
+      eventType: TaskEventType.COMPLETED,
+      taskId: completedTask.id,
+      userId: completedTask.userId,
+      correlationId: '', // Will be set by middleware
+      timestamp: new Date().toISOString(),
+    });
+
+    return newTask; // Return the new recurring instance
+  } else {
+    // For non-recurring tasks, just mark as complete
+    const updatedTask = await prisma.task.update({
+      where: { id },
+      data: { completed: true },
+    });
+
+    // Publish completion event
+    await publishEvent({
+      eventType: TaskEventType.COMPLETED,
+      taskId: updatedTask.id,
+      userId: updatedTask.userId,
+      correlationId: '', // Will be set by middleware
+      timestamp: new Date().toISOString(),
+    });
+
+    return updatedTask;
+  }
+}
+
+export async function markTaskIncomplete(id: string, userId: string): Promise<Task | null> {
+  const existingTask = await prisma.task.findUnique({
+    where: { id, userId },
+  });
+
+  if (!existingTask) {
+    return null;
+  }
+
+  const updatedTask = await prisma.task.update({
+    where: { id },
+    data: { completed: false },
+  });
+
+  // Publish event
+  await publishEvent({
+    eventType: TaskEventType.IN_COMPLETE,
+    taskId: updatedTask.id,
+    userId: updatedTask.userId,
+    correlationId: '', // Will be set by middleware
+    timestamp: new Date().toISOString(),
+  });
+
+  return updatedTask;
+}
+
+export async function getOverdueTasks(userId: string): Promise<Task[]> {
+  const now = new Date();
+  const tasks = await prisma.task.findMany({
+    where: {
+      userId,
+      completed: false,
+      dueDate: {
+        lt: now,
+      },
+    },
+  });
+
+  return tasks;
+}
+
+=== END FILE ===
+
+=== FILE: backend/src/events/publisher.ts ===
+import { TaskEvent } from './event-types';
+import { getLogger } from '../config/logger.config';
+import { getDaprClient, PUBSUB_NAME, TOPIC_NAME } from '../config/dapr.config';
+
+export async function publishEvent(event: TaskEvent): Promise<void> {
+  const log = getLogger();
+  try {
+    const client = getDaprClient();
+    await client.pubsub.publish(PUBSUB_NAME, TOPIC_NAME, event);
+    log.info(
+      {
+        eventType: event.eventType,
+        taskId: event.taskId,
+        correlationId: event.correlationId,
+      },
+      'Event published'
+    );
+  } catch (error) {
+    log.error(
+      {
+        error,
+        eventType: event.eventType,
+        taskId: event.taskId,
+        correlationId: event.correlationId,
+      },
+      'Failed to publish event (fire-and-forget)'
+    );
+    // Do NOT throw — fire-and-forget
+  }
+}
+
+=== END FILE ===
+
+=== FILE: backend/src/events/event-types.ts ===
+export enum TaskEventType {
+  CREATED = 'tasks.created',
+  UPDATED = 'tasks.updated',
+  DELETED = 'tasks.deleted',
+  COMPLETED = 'tasks.completed',
+  INCOMPLETE = 'tasks.incomplete',
+  OVERDUE = 'tasks.overdue',
+  REMINDER = 'tasks.reminder',
+}
+
+export interface TaskEvent {
+  eventType: TaskEventType;
+  taskId: string;
+  userId: string;
+  correlationId: string;
+  timestamp: string;
+}
+
+export interface TaskCreatedEvent extends TaskEvent {
+  eventType: TaskEventType.CREATED;
+  title: string;
+  priority: string;
+  dueDate: string | null;
+  recurring: boolean;
+}
+
+export interface TaskUpdatedEvent extends TaskEvent {
+  eventType: TaskEventType.UPDATED;
+  changes: Record<string, unknown>;
+}
+
+export interface TaskDeletedEvent extends TaskEvent {
+  eventType: TaskEventType.DELETED;
+}
+
+export interface TaskCompletedEvent extends TaskEvent {
+  eventType: TaskEventType.COMPLETED;
+}
+
+export interface TaskIncompleteEvent extends TaskEvent {
+  eventType: TaskEventType.INCOMPLETE;
+}
+
+=== END FILE ===
+
+=== FILE: frontend/src/App.tsx ===
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { AuthProvider } from './context/AuthContext';
+import { ProtectedRoute } from './components/ProtectedRoute';
+import { HomePage } from './pages/HomePage';
+import { SignupPage } from './pages/SignupPage';
+import { SigninPage } from './pages/SigninPage';
+import { DashboardPage } from './pages/DashboardPage';
+import './styles/globals.css';
+
+/**
+ * Root App Component
+ * Sets up routing structure and global providers
+ */
+
+function App() {
+  return (
+    <AuthProvider>
+      <BrowserRouter>
+        <Routes>
+          {/* Homepage */}
+          <Route path="/" element={<HomePage />} />
+
+          {/* Auth routes */}
+          <Route path="/signup" element={<SignupPage />} />
+          <Route path="/signin" element={<SigninPage />} />
+
+          {/* Protected routes */}
+          <Route
+            path="/dashboard"
+            element={
+              <ProtectedRoute>
+                <DashboardPage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* 404 Not Found */}
+          <Route path="*" element={<NotFound />} />
+        </Routes>
+      </BrowserRouter>
+    </AuthProvider>
+  );
+}
+
+function NotFound() {
+  return (
+    <div className="flex items-center justify-center min-h-screen">
+      <div className="text-center">
+        <h1 className="text-6xl font-bold text-gray-900 mb-4">404</h1>
+        <p className="text-gray-600">Page not found</p>
+      </div>
+    </div>
+  );
+}
+
+export default App;
+
+=== END FILE ===
+
+=== FILE: frontend/src/pages/DashboardPage.tsx ===
+import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../hooks/useAuth';
+import { signout } from '../services/auth.api';
+import { Button } from '../components/Button';
+import { TaskFilters } from '../components/TaskFilters';
+import { TaskSortControls } from '../components/TaskSortControls';
+import { AddTaskFormContainer } from '../containers/AddTaskFormContainer';
+import { EditTaskFormContainer } from '../containers/EditTaskFormContainer';
+import { ToastContainer } from '../components/ToastContainer';
+import { Task } from '../types/task.types';
+import { useTasks } from '../hooks/useTasks';
+import { useToast } from '../hooks/useToast';
+import * as tasksApi from '../services/tasks.api';
+import { formatDate, getRelativeTime } from '../utils/dateFormatter';
+import { Spinner } from '../components/Spinner';
+import FloatingChatbot from '../components/FloatingChatbot';
+
+/**
+ * Dashboard Page
+ * Main task management interface with full CRUD functionality
+ */
+
+export function DashboardPage() {
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
+  const { toasts, removeToast, success, error } = useToast();
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [editingTask, setEditingTask] = useState<Task | null>(null);
+
+  // Filter and sort state
+  const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [completedFilter, setCompletedFilter] = useState('all');
+  const [priorityFilter, setPriorityFilter] = useState('all');
+  const [tagFilter, setTagFilter] = useState('all');
+  const [sortBy, setSortBy] = useState('createdAt');
+  const [sortOrder, setSortOrder] = useState('desc');
+
+  // Debounce search input (300ms)
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search);
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  // Build filter object for API
+  const filters: tasksApi.TaskFilters = {
+    search: debouncedSearch || undefined,
+    completed: completedFilter === 'completed' ? true : completedFilter === 'incomplete' ? false : undefined,
+    priority: priorityFilter !== 'all' ? priorityFilter : undefined,
+    tag: tagFilter !== 'all' ? tagFilter : undefined,
+    sort: sortBy,
+    order: sortOrder,
+  };
+
+  // Fetch tasks with filters
+  const { tasks, isLoading, error: loadError, refetch } = useTasks(filters);
+
+  // Extract unique tags from tasks for filter dropdown
+  const availableTags = Array.from(new Set(tasks.flatMap(task => task.tags))).sort();
+
+  const handleSignout = async () => {
+    try {
+      await signout();
+      logout();
+      navigate('/signin');
+    } catch (err: any) {
+      error('Failed to sign out. Please try again.');
+      console.error('Signout failed:', err);
+    }
+  };
+
+  const handleAddSuccess = () => {
+    success('Task created successfully!');
+    refetch();
+  };
+
+  const handleEditClick = (task: Task) => {
+    setEditingTask(task);
+    setIsEditModalOpen(true);
+  };
+
+  const handleEditSuccess = () => {
+    success('Task updated successfully!');
+    refetch();
+  };
+
+  const handleEditClose = () => {
+    setIsEditModalOpen(false);
+    setEditingTask(null);
+  };
+
+  const handleToggleComplete = async (id: string) => {
+    const task = tasks.find((t) => t.id === id);
+    if (!task) return;
+
+    try {
+      if (task.completed) {
+        await tasksApi.markIncomplete(id);
+        success('Task marked as incomplete');
+      } else {
+        await tasksApi.markComplete(id);
+        success(task.recurrencePattern ? 'Task completed! New instance created.' : 'Task completed!');
+      }
+      refetch();
+    } catch (err: any) {
+      error(`Failed to update task: ${err.message}`);
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm('Are you sure you want to delete this task?')) {
+      return;
+    }
+
+    try {
+      await tasksApi.deleteTask(id);
+      success('Task deleted successfully');
+      refetch();
+    } catch (err: any) {
+      error(`Failed to delete task: ${err.message}`);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-dark-950 via-dark-900 to-dark-800/95">
+      {/* Toast Notifications */}
+      <ToastContainer toasts={toasts} onRemove={removeToast} />
+
+      {/* Header - Improved contrast and spacing */}
+      <header className="sticky top-0 z-50 bg-dark-900/95 backdrop-blur-xl border-b border-dark-700/50 shadow-lg">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-5">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+            <div className="space-y-1">
+              <h1 className="text-2xl sm:text-3xl font-bold bg-gradient-to-r from-primary-300 via-primary-400 to-accent-purple bg-clip-text text-transparent">
+                TaskFlow
+              </h1>
+              <p className="text-sm text-dark-300 font-medium">Welcome back, {user?.name || user?.email}</p>
+            </div>
+            <div className="flex items-center gap-2 sm:gap-3 w-full sm:w-auto">
+              <Button
+                onClick={() => setIsAddModalOpen(true)}
+                className="flex-1 sm:flex-none bg-gradient-to-r from-primary-600 to-primary-500 hover:from-primary-500 hover:to-primary-400 text-white shadow-lg shadow-primary-500/30 hover:shadow-xl hover:shadow-primary-500/40"
+                size="lg"
+              >
+                <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+                <span className="hidden sm:inline font-semibold">New Task</span>
+                <span className="sm:hidden font-semibold">New</span>
+              </Button>
+              <Button
+                onClick={handleSignout}
+                variant="ghost"
+                className="flex-1 sm:flex-none text-dark-300 hover:text-dark-100 hover:bg-dark-800/80"
+                size="lg"
+              >
+                <svg className="w-4 h-4 sm:mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                </svg>
+                <span className="hidden sm:inline">Sign Out</span>
+              </Button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Content */}
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* Left Column - Task Management */}
+          <div className="lg:col-span-2">
+            <div className="glass-card p-6 sm:p-8 animate-scale-in">
+              {/* Section Header with improved hierarchy */}
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 pb-4 border-b border-dark-700/50">
+                <div>
+                  <h2 className="text-2xl font-bold text-dark-50 mb-1">My Tasks</h2>
+                  <p className="text-sm text-dark-400">
+                    {tasks.length} {tasks.length === 1 ? 'task' : 'tasks'} total
+                    <span className="mx-2">•</span>
+                    <span className="text-primary-400 font-medium">{tasks.filter(t => !t.completed).length} pending</span>
+                    <span className="mx-2">•</span>
+                    <span className="text-green-400 font-medium">{tasks.filter(t => t.completed).length} completed</span>
+                  </p>
+                </div>
+              </div>
+
+              {/* Filters */}
+              <div className="mb-6">
+                <TaskFilters
+                  search={search}
+                  onSearchChange={setSearch}
+                  completedFilter={completedFilter}
+                  onCompletedFilterChange={setCompletedFilter}
+                  priorityFilter={priorityFilter}
+                  onPriorityFilterChange={setPriorityFilter}
+                  tagFilter={tagFilter}
+                  onTagFilterChange={setTagFilter}
+                  availableTags={availableTags}
+                />
+              </div>
+
+              {/* Sort Controls */}
+              <div className="mb-6">
+                <TaskSortControls
+                  sortBy={sortBy}
+                  onSortByChange={setSortBy}
+                  sortOrder={sortOrder}
+                  onSortOrderChange={setSortOrder}
+                />
+              </div>
+
+              {/* Task List */}
+              {isLoading ? (
+                <div className="flex flex-col items-center justify-center py-16">
+                  <Spinner size="lg" variant="gradient" className="mb-4" />
+                  <p className="text-dark-400">Loading your tasks...</p>
+                </div>
+              ) : loadError ? (
+                <div className="bg-red-500/20 border border-red-500/30 rounded-xl p-6 text-center">
+                  <div className="flex items-center justify-center mb-4">
+                    <svg className="w-8 h-8 text-red-400 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <h3 className="text-lg font-medium text-red-400">Error Loading Tasks</h3>
+                  </div>
+                  <p className="text-dark-400 mb-4">{loadError}</p>
+                  <Button onClick={refetch} variant="primary">
+                    Try Again
+                  </Button>
+                </div>
+              ) : tasks.length === 0 ? (
+                <div className="text-center py-20 px-4">
+                  <div className="mx-auto w-28 h-28 bg-gradient-to-br from-primary-500/20 to-accent-purple/20 rounded-full flex items-center justify-center mb-8 animate-pulse">
+                    <svg className="w-14 h-14 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                    </svg>
+                  </div>
+                  <h3 className="text-2xl font-bold text-dark-100 mb-3">
+                    {debouncedSearch || completedFilter !== 'all' || priorityFilter !== 'all' || tagFilter !== 'all'
+                      ? 'No tasks match your filters'
+                      : 'No tasks yet'}
+                  </h3>
+                  <p className="text-dark-300 mb-8 text-lg max-w-md mx-auto leading-relaxed">
+                    {debouncedSearch || completedFilter !== 'all' || priorityFilter !== 'all' || tagFilter !== 'all'
+                      ? 'Try adjusting your filters to see more tasks.'
+                      : 'Start organizing your work by creating your first task!'}
+                  </p>
+                  <Button
+                    onClick={() => setIsAddModalOpen(true)}
+                    className="bg-gradient-to-r from-primary-600 to-primary-500 hover:from-primary-500 hover:to-primary-400 text-white shadow-lg shadow-primary-500/30 hover:shadow-xl hover:shadow-primary-500/40 px-8 py-4 text-base font-semibold"
+                    size="lg"
+                  >
+                    <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                    </svg>
+                    Create Your First Task
+                  </Button>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {tasks.map((task) => (
+                    <div
+                      key={task.id}
+                      className={`group relative glass-card-hover p-5 sm:p-6 transition-all duration-300 ${
+                        task.completed ? 'opacity-60 hover:opacity-75' : 'hover:scale-[1.01]'
+                      }`}
+                    >
+                      <div className="flex flex-col sm:flex-row items-start gap-4">
+                        {/* Checkbox with improved styling */}
+                        <div className="flex-shrink-0 mt-0.5">
+                          <input
+                            type="checkbox"
+                            checked={task.completed}
+                            onChange={() => handleToggleComplete(task.id)}
+                            className="w-5 h-5 text-primary-500 bg-dark-700/50 border-dark-600 rounded-md focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 focus:ring-offset-dark-900 cursor-pointer transition-all hover:scale-110"
+                            aria-label={`Mark "${task.title}" as ${task.completed ? 'incomplete' : 'complete'}`}
+                          />
+                        </div>
+
+                        {/* Content with improved typography */}
+                        <div className="flex-1 min-w-0">
+                          <h3
+                            className={`text-lg font-semibold break-words transition-colors ${
+                              task.completed
+                                ? 'line-through text-dark-500'
+                                : 'text-dark-100 group-hover:text-primary-300'
+                            }`}
+                          >
+                            {task.title}
+                          </h3>
+
+                          {task.description && (
+                            <p className={`text-sm mt-2 break-words leading-relaxed ${
+                              task.completed ? 'text-dark-500' : 'text-dark-300'
+                            }`}>
+                              {task.description}
+                            </p>
+                          )}
+
+                          {/* Metadata with improved spacing and contrast */}
+                          <div className="flex flex-wrap gap-2 mt-4">
+                            {/* Priority Badge */}
+                            {task.priority && (
+                              <span className={`badge-${task.priority} font-semibold`}>
+                                {task.priority.charAt(0).toUpperCase() + task.priority.slice(1)}
+                              </span>
+                            )}
+
+                            {/* Tags */}
+                            {task.tags.map((tag) => (
+                              <span key={tag} className="badge-tag font-medium">
+                                #{tag}
+                              </span>
+                            ))}
+
+                            {/* Category */}
+                            {task.category && (
+                              <span className="badge-base bg-dark-700/70 text-dark-200 border border-dark-600/50 font-medium">
+                                📁 {task.category}
+                              </span>
+                            )}
+
+                            {/* Due Date with improved visibility */}
+                            {task.dueDate && (
+                              <span
+                                className={`badge-base font-medium ${
+                                  task.isOverdue && !task.completed
+                                    ? 'bg-red-500/25 text-red-300 border border-red-500/40 shadow-sm shadow-red-500/20'
+                                    : 'bg-purple-500/25 text-purple-300 border border-purple-500/40'
+                                }`}
+                                title={formatDate(task.dueDate)}
+                              >
+                                📅 {getRelativeTime(task.dueDate)}
+                              </span>
+                            )}
+
+                            {/* Recurrence indicator */}
+                            {task.recurrencePattern && (
+                              <span className="badge-base bg-green-500/25 text-green-300 border border-green-500/40 font-medium">
+                                🔁 {task.recurrencePattern.charAt(0).toUpperCase() + task.recurrencePattern.slice(1)}
+                              </span>
+                            )}
+
+                            {/* Overdue indicator */}
+                            {task.isOverdue && !task.completed && (
+                              <span className="badge-base bg-red-500/30 text-red-200 border border-red-500/50 animate-pulse font-bold shadow-sm shadow-red-500/30">
+                                ⚠️ Overdue
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Actions with improved buttons */}
+                        <div className="flex gap-2 w-full sm:w-auto mt-4 sm:mt-0 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                          <Button
+                            onClick={() => handleEditClick(task)}
+                            variant="ghost"
+                            className="text-sm px-3 py-2 flex-1 sm:flex-none text-primary-400 hover:text-primary-300 hover:bg-primary-500/10"
+                            aria-label={`Edit task "${task.title}"`}
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                            </svg>
+                            <span className="ml-1.5 hidden md:inline">Edit</span>
+                          </Button>
+                          <Button
+                            onClick={() => handleDelete(task.id)}
+                            variant="ghost"
+                            className="text-sm px-3 py-2 flex-1 sm:flex-none text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                            aria-label={`Delete task "${task.title}"`}
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
+                            <span className="ml-1.5 hidden md:inline">Delete</span>
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Right Column - Additional space for task management */}
+          <div className="lg:col-span-1">
+            <div className="glass-card p-6 sm:p-8 h-full">
+              <div className="flex flex-col h-full">
+                <h2 className="text-2xl font-bold text-dark-50 mb-6">Task Insights</h2>
+                <div className="flex-grow flex items-center justify-center">
+                  <div className="text-center text-dark-400">
+                    <svg className="w-16 h-16 mx-auto mb-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                    </svg>
+                    <p className="text-lg font-medium text-dark-300">AI Assistant Available</p>
+                    <p className="mt-2">Click the chat icon in the corner to interact with your AI assistant</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+
+      {/* Modals */}
+      <AddTaskFormContainer
+        isOpen={isAddModalOpen}
+        onClose={() => setIsAddModalOpen(false)}
+        onSuccess={handleAddSuccess}
+      />
+
+      <EditTaskFormContainer
+        isOpen={isEditModalOpen}
+        task={editingTask}
+        onClose={handleEditClose}
+        onSuccess={handleEditSuccess}
+      />
+      {/* Floating AI Chatbot */}
+      <FloatingChatbot position="bottom-right" onTasksUpdated={refetch} />
+    </div>
+  );
+}
+
+=== END FILE ===
+
+=== FILE: ai-agent/src/index.ts ===
+/**
+ * AI Agent Service - Main Entry Point
+ * Background service for autonomous task suggestions
+ * Phase 5: Reactive AI Agents with Dapr Event Subscriptions
+ */
+
+import express from 'express';
+import { logger } from './config/logger.config';
+import { initializeScheduler, shutdownScheduler } from './scheduler';
+import { getDatabaseStatus } from './config/database.config';
+import { createSubscriptionRouter, registerHandler } from './events/subscribers';
+import { handleTaskCreatedEvent, handleTaskCompletedEvent } from './agents/overdue-agent';
+import { handleTaskUpdatedEvent } from './agents/prioritization-agent';
+import { TaskEventType } from './events/event-types';
+
+const SERVICE_NAME = 'ai-agent';
+const SHUTDOWN_TIMEOUT = 30000; // 30 seconds
+const PORT = parseInt(process.env.PORT || '5000', 10);
+
+let isShuttingDown = false;
+let httpServer: ReturnType<typeof app.listen> | null = null;
+
+// Express app for Dapr subscription endpoints
+const app = express();
+app.use(express.json());
+
+// Health check endpoint
+app.get('/health', (_req, res) => {
+  res.status(200).json({ status: 'ok', service: SERVICE_NAME });
+});
+
+// Mount Dapr subscription router
+app.use(createSubscriptionRouter());
+
+/**
+ * Main entry point
+ */
+async function main(): Promise<void> {
+  logger.info({ service: SERVICE_NAME }, 'Starting AI Agent service');
+
+  try {
+    // Check database connectivity
+    const dbStatus = await getDatabaseStatus();
+    if (!dbStatus.connected) {
+      logger.error({ error: dbStatus.error }, 'Database connection failed');
+      process.exit(1);
+    }
+
+    logger.info('Database connection established');
+
+    // Register event handlers for Dapr subscriptions
+    registerHandler(TaskEventType.CREATED, handleTaskCreatedEvent);
+    registerHandler(TaskEventType.UPDATED, handleTaskUpdatedEvent);
+    registerHandler(TaskEventType.COMPLETED, handleTaskCompletedEvent);
+    logger.info('Event handlers registered');
+
+    // Start Express HTTP server for Dapr subscriptions
+    httpServer = app.listen(PORT, () => {
+      logger.info({ port: PORT }, 'AI Agent HTTP server started for Dapr subscriptions');
+    });
+
+    // Initialize cron scheduler (runs alongside HTTP server)
+    await initializeScheduler();
+    logger.info('Scheduler initialized');
+
+    logger.info({ service: SERVICE_NAME }, 'AI Agent service started successfully');
+  } catch (error) {
+    logger.error({ error }, 'Failed to start AI Agent service');
+    process.exit(1);
+  }
+}
+
+/**
+ * Graceful shutdown handler
+ */
+async function shutdown(signal: string): Promise<void> {
+  if (isShuttingDown) {
+    logger.warn('Shutdown already in progress');
+    return;
+  }
+
+  isShuttingDown = true;
+  logger.info({ signal }, 'Received shutdown signal, starting graceful shutdown');
+
+  const shutdownTimeout = setTimeout(() => {
+    logger.error('Shutdown timeout exceeded, forcing exit');
+    process.exit(1);
+  }, SHUTDOWN_TIMEOUT);
+
+  try {
+    // Stop HTTP server
+    if (httpServer) {
+      await new Promise<void>((resolve, reject) => {
+        httpServer!.close((err) => {
+          if (err) reject(err);
+          else resolve();
+        });
+      });
+      logger.info('HTTP server stopped');
+    }
+
+    // Stop scheduler
+    await shutdownScheduler();
+    logger.info('Scheduler stopped');
+
+    clearTimeout(shutdownTimeout);
+    logger.info('Graceful shutdown completed');
+    process.exit(0);
+  } catch (error) {
+    logger.error({ error }, 'Error during shutdown');
+    clearTimeout(shutdownTimeout);
+    process.exit(1);
+  }
+}
+
+// Register signal handlers
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+  logger.error({ error }, 'Uncaught exception');
+  shutdown('uncaughtException');
+});
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (reason, promise) => {
+  logger.error({ reason, promise }, 'Unhandled promise rejection');
+});
+
+// Start the service
+main().catch((error) => {
+  logger.error({ error }, 'Fatal error in main');
+  process.exit(1);
+});
+
+=== END FILE ===
+
+=== FILE: ai-agent/src/agents/overdue-agent.ts ===
+/**
+ * Overdue Task Agent
+ * Monitors tasks for overdue status and creates reminder suggestions
+ * Phase 4: Cloud-Native Kubernetes Deployment
+ */
+
+import { getPrismaClient } from '../config/database.config';
+import { logger } from '../config/logger.config';
+import { createSuggestion } from '../services/suggestion-api.service';
+import { checkRateLimit } from '../utils/rate-limiter';
+import { TaskCreatedEvent, TaskCompletedEvent } from '../events/event-types';
+
+const prisma = getPrismaClient();
+
+// Configuration
+const BATCH_SIZE = 100;
+const OVERDUE_THRESHOLD_DAYS = 0; // Tasks are overdue if past due date
+
+/**
+ * Run the overdue task agent
+ * Finds overdue tasks and creates suggestions for users with agents enabled
+ */
+export async function runOverdueAgent(): Promise<void> {
+  const startTime = Date.now();
+  logger.info('Starting overdue agent run');
+
+  try {
+    // Get users with autonomous agents enabled
+    const usersWithAgents = await prisma.user.findMany({
+      where: { autonomousAgentsEnabled: true },
+      select: { id: true },
+    });
+
+    if (usersWithAgents.length === 0) {
+      logger.info('No users with autonomous agents enabled');
+      return;
+    }
+
+    const userIds = usersWithAgents.map((u) => u.id);
+    logger.info({ userCount: userIds.length }, 'Found users with agents enabled');
+
+    let totalSuggestions = 0;
+    let processedTasks = 0;
+
+    // Process users in batches
+    for (const userId of userIds) {
+      // Check rate limit for this user
+      if (!await checkRateLimit(userId)) {
+        logger.debug({ userId }, 'Rate limit reached for user, skipping');
+        continue;
+      }
+
+      // Find overdue tasks for this user
+      const overdueTasks = await prisma.task.findMany({
+        where: {
+          userId,
+          completed: false,
+          dueDate: {
+            lt: new Date(),
+          },
+        },
+        select: {
+          id: true,
+          title: true,
+          dueDate: true,
+          priority: true,
+        },
+        take: BATCH_SIZE,
+        orderBy: { dueDate: 'asc' },
+      });
+
+      if (overdueTasks.length === 0) {
+        continue;
+      }
+
+      logger.debug({ userId, taskCount: overdueTasks.length }, 'Found overdue tasks');
+
+      // Create suggestions for overdue tasks
+      for (const task of overdueTasks) {
+        processedTasks++;
+
+        const daysOverdue = Math.floor(
+          (Date.now() - task.dueDate!.getTime()) / (1000 * 60 * 60 * 24)
+        );
+
+        // Only suggest for tasks at least 1 day overdue
+        if (daysOverdue < 1) {
+          continue;
+        }
+
+        const message =
+          daysOverdue === 1
+            ? `Task "${task.title}" is 1 day overdue. Consider updating its due date or marking it complete.`
+            : `Task "${task.title}" is ${daysOverdue} days overdue. Consider updating its due date or marking it complete.`;
+
+        const created = await createSuggestion({
+          userId,
+          taskId: task.id,
+          suggestionType: 'overdue_reminder',
+          message,
+          metadata: {
+            daysOverdue,
+            taskTitle: task.title,
+            taskPriority: task.priority,
+            dueDate: task.dueDate?.toISOString(),
+          },
+        });
+
+        if (created) {
+          totalSuggestions++;
+        }
+      }
+    }
+
+    const duration = Date.now() - startTime;
+    logger.info(
+      {
+        duration,
+        processedTasks,
+        suggestionsCreated: totalSuggestions,
+        usersProcessed: userIds.length,
+      },
+      'Overdue agent run completed'
+    );
+  } catch (error) {
+    logger.error({ error }, 'Overdue agent run failed');
+    throw error;
+  }
+}
+
+/**
+ * Event handler: React to tasks.created events
+ * Creates overdue suggestion immediately if task is already past due
+ */
+export async function handleTaskCreatedEvent(event: TaskCreatedEvent): Promise<void> {
+  const log = logger.child({
+    handler: 'handleTaskCreatedEvent',
+    taskId: event.taskId,
+    userId: event.userId,
+    correlationId: event.correlationId,
+  });
+
+  // Only process tasks with a due date that is in the past
+  if (!event.dueDate) {
+    log.debug('Task has no due date, skipping');
+    return;
+  }
+
+  const dueDate = new Date(event.dueDate);
+  if (dueDate >= new Date()) {
+    log.debug('Task is not overdue, skipping');
+    return;
+  }
+
+  // Check user has autonomous agents enabled
+  const user = await prisma.user.findUnique({
+    where: { id: event.userId },
+    select: { autonomousAgentsEnabled: true },
+  });
+
+  if (!user?.autonomousAgentsEnabled) {
+    log.debug('User does not have autonomous agents enabled, skipping');
+    return;
+  }
+
+  // Check rate limit
+  if (!await checkRateLimit(event.userId)) {
+    log.debug('Rate limit reached for user, skipping');
+    return;
+  }
+
+  // Deduplication: check for existing overdue_reminder for this task within 1 hour
+  const oneHourAgo = new Date();
+  oneHourAgo.setHours(oneHourAgo.getHours() - 1);
+
+  const existingCount = await prisma.agentSuggestion.count({
+    where: {
+      userId: event.userId,
+      taskId: event.taskId,
+      suggestionType: 'overdue_reminder',
+      createdAt: { gte: oneHourAgo },
+    },
+  });
+
+  if (existingCount > 0) {
+    log.debug('Duplicate overdue suggestion exists within 1 hour, skipping');
+    return;
+  }
+
+  const daysOverdue = Math.floor(
+    (Date.now() - dueDate.getTime()) / (1000 * 60 * 60 * 24)
+  );
+
+  const message =
+    daysOverdue <= 1
+      ? `Task "${event.title}" is overdue. Consider updating its due date or marking it complete.`
+      : `Task "${event.title}" is ${daysOverdue} days overdue. Consider updating its due date or marking it complete.`;
+
+  const created = await createSuggestion({
+    userId: event.userId,
+    taskId: event.taskId,
+    suggestionType: 'overdue_reminder',
+    message,
+    metadata: {
+      daysOverdue,
+      taskTitle: event.title,
+      taskPriority: event.priority,
+      dueDate: event.dueDate,
+      correlationId: event.correlationId,
+      sourceEvent: event.eventType,
+    },
+    sourceEvent: event.eventType,
+    correlationId: event.correlationId,
+  });
+
+  log.info(
+    { outcome: created ? 'suggestion_created' : 'skipped', daysOverdue },
+    'handleTaskCreatedEvent completed'
+  );
+}
+
+/**
+ * Event handler: React to tasks.completed events
+ * Dismisses existing overdue_reminder suggestions for the completed task
+ */
+export async function handleTaskCompletedEvent(event: TaskCompletedEvent): Promise<void> {
+  const log = logger.child({
+    handler: 'handleTaskCompletedEvent',
+    taskId: event.taskId,
+    userId: event.userId,
+    correlationId: event.correlationId,
+  });
+
+  try {
+    const result = await prisma.agentSuggestion.updateMany({
+      where: {
+        taskId: event.taskId,
+        userId: event.userId,
+        suggestionType: 'overdue_reminder',
+        dismissed: false,
+      },
+      data: {
+        dismissed: true,
+      },
+    });
+
+    log.info(
+      { dismissedCount: result.count, outcome: result.count > 0 ? 'suggestions_dismissed' : 'no_suggestions_to_dismiss' },
+      'handleTaskCompletedEvent completed'
+    );
+  } catch (error) {
+    log.error({ error }, 'Failed to dismiss overdue suggestions');
+    throw error;
+  }
+}
+
+=== END FILE ===
+
+=== FILE: docker-compose.yaml ===
+# Docker Compose Configuration for Todo Application
+# Phase 4: Cloud-Native Kubernetes Deployment
+#
+# Usage:
+#   Development: docker-compose up --build
+#   Production:  docker-compose -f docker-compose.yaml -f docker-compose.override.yaml up
+
+version: '3.8'
+
+services:
+  # Backend API Service
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: todo-backend
+    ports:
+      - "4000:4000"
+    environment:
+      - NODE_ENV=development
+      - PORT=4000
+      - DATABASE_URL=${DATABASE_URL}
+      - AUTH_SECRET=${AUTH_SECRET}
+      - LOG_LEVEL=info
+    depends_on:
+      - db
+    networks:
+      - todo-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  # Frontend UI Service
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: todo-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - VITE_API_BASE_URL=http://backend:4000
+    depends_on:
+      - backend
+    networks:
+      - todo-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  # AI Agent Service (Background Jobs)
+  ai-agent:
+    build:
+      context: ./ai-agent
+      dockerfile: Dockerfile
+    container_name: todo-ai-agent
+    ports:
+      - "5000:5000"
+    environment:
+      - NODE_ENV=development
+      - PORT=5000
+      - DATABASE_URL=${DATABASE_URL}
+      - BACKEND_URL=http://backend:4000
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - AGENT_INTERVAL_MS=300000
+      - SUGGESTION_RATE_LIMIT=10
+      - LOG_LEVEL=info
+    depends_on:
+      - backend
+    networks:
+      - todo-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  # PostgreSQL Database (for local development)
+  db:
+    image: postgres:15-alpine
+    container_name: todo-db
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=todo_app
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - todo-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+networks:
+  todo-network:
+    driver: bridge
+    name: todo-network
+
+volumes:
+  postgres_data:
+    name: todo-postgres-data
+
+=== END FILE ===
+
+=== FILE: CLAUDE.md ===
+# Claude Code Rules
+
+This file is generated during init for the selected agent.
+
+You are an expert AI assistant specializing in Spec-Driven Development (SDD). Your primary goal is to work with the architext to build products.
+
+## Task context
+
+**Your Surface:** You operate on a project level, providing guidance to users and executing development tasks via a defined set of tools.
+
+**Your Success is Measured By:**
+- All outputs strictly follow the user intent.
+- Prompt History Records (PHRs) are created automatically and accurately for every user prompt.
+- Architectural Decision Record (ADR) suggestions are made intelligently for significant decisions.
+- All changes are small, testable, and reference code precisely.
+
+## Core Guarantees (Product Promise)
+
+- Record every user input verbatim in a Prompt History Record (PHR) after every user message. Do not truncate; preserve full multiline input.
+- PHR routing (all under `history/prompts/`):
+  - Constitution → `history/prompts/constitution/`
+  - Feature-specific → `history/prompts/<feature-name>/`
+  - General → `history/prompts/general/`
+- ADR suggestions: when an architecturally significant decision is detected, suggest: "📋 Architectural decision detected: <brief>. Document? Run `/sp.adr <title>`." Never auto‑create ADRs; require user consent.
+
+## Development Guidelines
+
+### 1. Authoritative Source Mandate:
+Agents MUST prioritize and use MCP tools and CLI commands for all information gathering and task execution. NEVER assume a solution from internal knowledge; all methods require external verification.
+
+### 2. Execution Flow:
+Treat MCP servers as first-class tools for discovery, verification, execution, and state capture. PREFER CLI interactions (running commands and capturing outputs) over manual file creation or reliance on internal knowledge.
+
+### 3. Knowledge capture (PHR) for Every User Input.
+After completing requests, you **MUST** create a PHR (Prompt History Record).
+
+**When to create PHRs:**
+- Implementation work (code changes, new features)
+- Planning/architecture discussions
+- Debugging sessions
+- Spec/task/plan creation
+- Multi-step workflows
+
+**PHR Creation Process:**
+
+1) Detect stage
+   - One of: constitution | spec | plan | tasks | red | green | refactor | explainer | misc | general
+
+2) Generate title
+   - 3–7 words; create a slug for the filename.
+
+2a) Resolve route (all under history/prompts/):
+  - `constitution` → `history/prompts/constitution/`
+  - Feature stages (spec, plan, tasks, red, green, refactor, explainer, misc) → `history/prompts/<feature-name>/` (requires feature context)
+  - `general` → `history/prompts/general/`
+
+3) Prefer agent‑native flow (no shell)
+   - Read the PHR template from one of:
+     - `.specify/templates/phr-template.prompt.md`
+     - `templates/phr-template.prompt.md`
+   - Allocate an ID (increment; on collision, increment again).
+   - Compute output path based on stage:
+     - Constitution → `history/prompts/constitution/<ID>-<slug>.constitution.prompt.md`
+     - Feature → `history/prompts/<feature-name>/<ID>-<slug>.<stage>.prompt.md`
+     - General → `history/prompts/general/<ID>-<slug>.general.prompt.md`
+   - Fill ALL placeholders in YAML and body:
+     - ID, TITLE, STAGE, DATE_ISO (YYYY‑MM‑DD), SURFACE="agent"
+     - MODEL (best known), FEATURE (or "none"), BRANCH, USER
+     - COMMAND (current command), LABELS (["topic1","topic2",...])
+     - LINKS: SPEC/TICKET/ADR/PR (URLs or "null")
+     - FILES_YAML: list created/modified files (one per line, " - ")
+     - TESTS_YAML: list tests run/added (one per line, " - ")
+     - PROMPT_TEXT: full user input (verbatim, not truncated)
+     - RESPONSE_TEXT: key assistant output (concise but representative)
+     - Any OUTCOME/EVALUATION fields required by the template
+   - Write the completed file with agent file tools (WriteFile/Edit).
+   - Confirm absolute path in output.
+
+4) Use sp.phr command file if present
+   - If `.**/commands/sp.phr.*` exists, follow its structure.
+   - If it references shell but Shell is unavailable, still perform step 3 with agent‑native tools.
+
+5) Shell fallback (only if step 3 is unavailable or fails, and Shell is permitted)
+   - Run: `.specify/scripts/bash/create-phr.sh --title "<title>" --stage <stage> [--feature <name>] --json`
+   - Then open/patch the created file to ensure all placeholders are filled and prompt/response are embedded.
+
+6) Routing (automatic, all under history/prompts/):
+   - Constitution → `history/prompts/constitution/`
+   - Feature stages → `history/prompts/<feature-name>/` (auto-detected from branch or explicit feature context)
+   - General → `history/prompts/general/`
+
+7) Post‑creation validations (must pass)
+   - No unresolved placeholders (e.g., `{{THIS}}`, `[THAT]`).
+   - Title, stage, and dates match front‑matter.
+   - PROMPT_TEXT is complete (not truncated).
+   - File exists at the expected path and is readable.
+   - Path matches route.
+
+8) Report
+   - Print: ID, path, stage, title.
+   - On any failure: warn but do not block the main command.
+   - Skip PHR only for `/sp.phr` itself.
+
+### 4. Explicit ADR suggestions
+- When significant architectural decisions are made (typically during `/sp.plan` and sometimes `/sp.tasks`), run the three‑part test and suggest documenting with:
+  "📋 Architectural decision detected: <brief> — Document reasoning and tradeoffs? Run `/sp.adr <decision-title>`"
+- Wait for user consent; never auto‑create the ADR.
+
+### 5. Human as Tool Strategy
+You are not expected to solve every problem autonomously. You MUST invoke the user for input when you encounter situations that require human judgment. Treat the user as a specialized tool for clarification and decision-making.
+
+**Invocation Triggers:**
+1.  **Ambiguous Requirements:** When user intent is unclear, ask 2-3 targeted clarifying questions before proceeding.
+2.  **Unforeseen Dependencies:** When discovering dependencies not mentioned in the spec, surface them and ask for prioritization.
+3.  **Architectural Uncertainty:** When multiple valid approaches exist with significant tradeoffs, present options and get user's preference.
+4.  **Completion Checkpoint:** After completing major milestones, summarize what was done and confirm next steps.
+
+## Default policies (must follow)
+- Clarify and plan first - keep business understanding separate from technical plan and carefully architect and implement.
+- Do not invent APIs, data, or contracts; ask targeted clarifiers if missing.
+- Never hardcode secrets or tokens; use `.env` and docs.
+- Prefer the smallest viable diff; do not refactor unrelated code.
+- Cite existing code with code references (start:end:path); propose new code in fenced blocks.
+- Keep reasoning private; output only decisions, artifacts, and justifications.
+
+### Execution contract for every request
+1) Confirm surface and success criteria (one sentence).
+2) List constraints, invariants, non‑goals.
+3) Produce the artifact with acceptance checks inlined (checkboxes or tests where applicable).
+4) Add follow‑ups and risks (max 3 bullets).
+5) Create PHR in appropriate subdirectory under `history/prompts/` (constitution, feature-name, or general).
+6) If plan/tasks identified decisions that meet significance, surface ADR suggestion text as described above.
+
+### Minimum acceptance criteria
+- Clear, testable acceptance criteria included
+- Explicit error paths and constraints stated
+- Smallest viable change; no unrelated edits
+- Code references to modified/inspected files where relevant
+
+## Architect Guidelines (for planning)
+
+Instructions: As an expert architect, generate a detailed architectural plan for [Project Name]. Address each of the following thoroughly.
+
+1. Scope and Dependencies:
+   - In Scope: boundaries and key features.
+   - Out of Scope: explicitly excluded items.
+   - External Dependencies: systems/services/teams and ownership.
+
+2. Key Decisions and Rationale:
+   - Options Considered, Trade-offs, Rationale.
+   - Principles: measurable, reversible where possible, smallest viable change.
+
+3. Interfaces and API Contracts:
+   - Public APIs: Inputs, Outputs, Errors.
+   - Versioning Strategy.
+   - Idempotency, Timeouts, Retries.
+   - Error Taxonomy with status codes.
+
+4. Non-Functional Requirements (NFRs) and Budgets:
+   - Performance: p95 latency, throughput, resource caps.
+   - Reliability: SLOs, error budgets, degradation strategy.
+   - Security: AuthN/AuthZ, data handling, secrets, auditing.
+   - Cost: unit economics.
+
+5. Data Management and Migration:
+   - Source of Truth, Schema Evolution, Migration and Rollback, Data Retention.
+
+6. Operational Readiness:
+   - Observability: logs, metrics, traces.
+   - Alerting: thresholds and on-call owners.
+   - Runbooks for common tasks.
+   - Deployment and Rollback strategies.
+   - Feature Flags and compatibility.
+
+7. Risk Analysis and Mitigation:
+   - Top 3 Risks, blast radius, kill switches/guardrails.
+
+8. Evaluation and Validation:
+   - Definition of Done (tests, scans).
+   - Output Validation for format/requirements/safety.
+
+9. Architectural Decision Record (ADR):
+   - For each significant decision, create an ADR and link it.
+
+### Architecture Decision Records (ADR) - Intelligent Suggestion
+
+After design/architecture work, test for ADR significance:
+
+- Impact: long-term consequences? (e.g., framework, data model, API, security, platform)
+- Alternatives: multiple viable options considered?
+- Scope: cross‑cutting and influences system design?
+
+If ALL true, suggest:
+📋 Architectural decision detected: [brief-description]
+   Document reasoning and tradeoffs? Run `/sp.adr [decision-title]`
+
+Wait for consent; never auto-create ADRs. Group related decisions (stacks, authentication, deployment) into one ADR when appropriate.
+
+## Basic Project Structure
+
+- `.specify/memory/constitution.md` — Project principles
+- `specs/<feature>/spec.md` — Feature requirements
+- `specs/<feature>/plan.md` — Architecture decisions
+- `specs/<feature>/tasks.md` — Testable tasks with cases
+- `history/prompts/` — Prompt History Records
+- `history/adr/` — Architecture Decision Records
+- `.specify/` — SpecKit Plus templates and scripts
+
+## Code Standards
+See `.specify/memory/constitution.md` for code quality, testing, performance, security, and architecture principles.
+
+=== END FILE ===
+
+================================================================================
+                         END OF DOCUMENT
+================================================================================

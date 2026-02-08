@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: todo-config
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Chart.Name }}
+    app.kubernetes.io/version: {{ .Chart.AppVersion }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+data:
+  DAPR_HTTP_PORT: "3500"
+  DAPR_PUBSUB_NAME: "pubsub-kafka"
+  LOG_LEVEL: "info"
+  LOG_FORMAT: "json"
+  NODE_ENV: {{ if .Values.backend.env }}{{ .Values.backend.env.NODE_ENV | default "production" | quote }}{{ else }}"production"{{ end }}
+  BACKEND_URL: "http://todo-app-backend:{{ .Values.backend.service.port }}"

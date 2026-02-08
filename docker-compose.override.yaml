@@ -1,0 +1,76 @@
+# Docker Compose Override for Local Development
+# Phase 4: Cloud-Native Kubernetes Deployment
+#
+# This file is automatically loaded with docker-compose.yaml
+# It adds development-specific configurations like volume mounts for hot reloading
+#
+# Usage:
+#   docker-compose up --build
+#
+# To run without override (production-like):
+#   docker-compose -f docker-compose.yaml up --build
+
+version: '3.8'
+
+services:
+  # Backend with hot reloading
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: development
+    volumes:
+      - ./backend/src:/app/src:ro
+      - ./backend/prisma:/app/prisma:ro
+      - backend_node_modules:/app/node_modules
+    environment:
+      - NODE_ENV=development
+      - LOG_LEVEL=debug
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/todo_app?schema=public
+    command: npm run dev
+
+  # Frontend with hot reloading
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: development
+    volumes:
+      - ./frontend/src:/app/src:ro
+      - ./frontend/public:/app/public:ro
+      - frontend_node_modules:/app/node_modules
+    environment:
+      - NODE_ENV=development
+      - VITE_API_BASE_URL=http://localhost:4000
+    command: npm run dev -- --host 0.0.0.0
+
+  # AI Agent with hot reloading
+  ai-agent:
+    build:
+      context: ./ai-agent
+      dockerfile: Dockerfile
+      target: development
+    volumes:
+      - ./ai-agent/src:/app/src:ro
+      - ai_agent_node_modules:/app/node_modules
+    environment:
+      - NODE_ENV=development
+      - LOG_LEVEL=debug
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/todo_app?schema=public
+      - AGENT_INTERVAL_MS=60000
+    command: npm run dev
+
+  # Database with extended logging for development
+  db:
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=todo_app
+    ports:
+      - "5432:5432"
+
+# Named volumes for node_modules (prevents overwriting by bind mounts)
+volumes:
+  backend_node_modules:
+  frontend_node_modules:
+  ai_agent_node_modules:

@@ -1,0 +1,2239 @@
+# AI Agent and Todo Application Code Details
+
+## Backend AI Agent Files
+
+### backend/src/ai/agent.ts
+```typescript
+import OpenAI from 'openai';
+import { AIConfig } from '../config/ai.config';
+import {
+  AIChatResponse,
+  TaskOperationPlan,
+  AIConversationSession,
+  TaskOperation,
+  IntentType
+} from '../types/ai.types';
+import { AISessionModel } from '../models/ai-session.model';
+
+// --- DEFINITIONS ---
+
+const TOOLS_SCHEMA: OpenAI.Chat.Completions.ChatCompletionTool[] = [
+  {
+    type: "function",
+    function: {
+      name: "create_task",
+      description: "Create a new task. Extract all details like description, priority, tags, and due dates.",
+      parameters: {
+        type: "object",
+        properties: {
+          title: { type: "string", description: "The main task title" },
+          description: { type: "string", description: "Any additional details" },
+          priority: { type: "string", enum: ["low", "medium", "high"], description: "Priority level" },
+          due_date: { type: "string", description: "ISO 8601 date string (YYYY-MM-DD)." },
+          category: { type: "string", enum: ["Work", "Personal", "Health", "Finance", "Education"] },
+          tags: { type: "string", description: "Comma separated tags e.g. 'work, urgent'" }
+        },
+        required: ["title"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "delete_task",
+      description: "Delete an existing task immediately by its title.",
+      parameters: {
+        type: "object",
+        properties: {
+          target_title: { type: "string", description: "The title of the task to delete" }
+        },
+        required: ["target_title"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "update_task",
+      description: "Update details of a task (title, priority, tags) or mark it as complete/incomplete.",
+      parameters: {
+        type: "object",
+        properties: {
+          target_title: { type: "string", description: "The CURRENT title of the task to find" },
+          action: { type: "string", enum: ["update_details", "mark_complete", "mark_incomplete"] },
+          new_title: { type: "string" },
+          new_description: { type: "string" },
+          new_priority: { type: "string", enum: ["low", "medium", "high"] },
+          new_tags: { type: "string", description: "New tags to replace existing ones" },
+          new_due_date: { type: "string" }
+        },
+        required: ["target_title", "action"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "search_tasks",
+      description: "Search or list tasks.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string" },
+          priority: { type: "string" },
+          status: { type: "string" }
+        }
+      }
+    }
+  }
+];
+
+export class AI_Agent {
+  constructor(
+    private openaiClient: OpenAI,
+    private config: AIConfig
+  ) {}
+
+  async processChat(message: string, sessionId?: string, userId?: string): Promise<AIChatResponse> {
+    try {
+      // 1. Manage Session
+      const session = await this.getSession(sessionId, userId);
+
+      // 2. Prepare Context
+      const systemPrompt = `
+        You are an intelligent Task Orchestrator.
+        Today's date is ${new Date().toLocaleDateString()}.
+
+        YOUR RULES:
+        1. **Direct Action**: You are authorized to modify tasks immediately.
+        2. **Create**: Extract details like priority/dates/tags.
+           - Example: "Add urgent task #work" -> priority: high, tags: "work"
+        3. **Delete**: If user says delete, do it immediately.
+        4. **Dates**: Convert "tomorrow", "next friday" to YYYY-MM-DD.
+      `;
+
+      // 3. Call OpenRouter
+      const completion = await this.openaiClient.chat.completions.create({
+        model: this.config.modelName || 'meta-llama/llama-3.3-70b-instruct:free',
+        messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: message }
+        ],
+        tools: TOOLS_SCHEMA,
+        tool_choice: "auto",
+      });
+
+      const responseMessage = completion.choices[0].message;
+      let actionPlan: TaskOperationPlan[] = [];
+      let responseText = responseMessage.content || "Processed.";
+      let detectedIntentType = IntentType.UNKNOWN;
+
+      const requiresConfirmation = false;
+
+      // 4. Handle Tool Calls
+      if (responseMessage.tool_calls) {
+        for (const toolCall of responseMessage.tool_calls) {
+          const args = JSON.parse(toolCall.function.arguments);
+          const toolName = toolCall.function.name;
+
+          // --- CREATE ---
+          if (toolName === 'create_task') {
+            detectedIntentType = IntentType.CREATE_TASK;
+
+            // Handle Tags: Convert "tag1, tag2" string to array ["tag1", "tag2"]
+            let tagsArray: string[] = [];
+            if (args.tags) {
+                // Remove # symbol if user/AI added it, and split by comma
+                tagsArray = args.tags.split(',').map((t: string) => t.trim().replace(/^#/, ''));
+            }
+
+            const payload: any = {
+              title: args.title,
+              priority: args.priority || 'medium',
+              completed: false,
+              tags: tagsArray // Send array to backend
+            };
+            if (args.description) payload.description = args.description;
+            if (args.due_date) payload.dueDate = args.due_date;
+            if (args.category) payload.category = args.category;
+
+            actionPlan.push({
+              operation: TaskOperation.CREATE,
+              endpoint: '/tasks',
+              method: 'POST',
+              payload: payload
+            });
+
+            responseText = `I've added "**${args.title}**"`;
+            if (tagsArray.length > 0) responseText += ` with tags: ${tagsArray.join(', ')}`;
+            responseText += `.`;
+          }
+
+          // --- DELETE (Uses Magic Endpoint) ---
+          else if (toolName === 'delete_task') {
+            detectedIntentType = IntentType.DELETE_TASK;
+
+            const target = args.target_title;
+            const safeTarget = encodeURIComponent(target);
+
+            actionPlan.push({
+                operation: TaskOperation.DELETE,
+                // Points to the new route that finds by title
+                endpoint: \`/tasks/by-title?title=\${safeTarget}\`,
+                method: 'DELETE'
+            });
+            responseText = \`Done. I've deleted "**\${target}**" from your list. 🗑️\`;
+          }
+
+          // --- UPDATE / COMPLETE (Uses Magic Endpoints) ---
+          else if (toolName === 'update_task') {
+            const target = args.target_title;
+            const safeTarget = encodeURIComponent(target);
+
+            if (args.action === 'mark_complete') {
+                detectedIntentType = IntentType.MARK_COMPLETE;
+                actionPlan.push({
+                    operation: TaskOperation.MARK_COMPLETE,
+                    endpoint: \`/tasks/by-title/complete?title=\${safeTarget}\`,
+                    method: 'PATCH'
+                });
+                responseText = \`Marked "**\${target}**" as complete. ✅\`;
+            }
+            else if (args.action === 'mark_incomplete') {
+                detectedIntentType = IntentType.MARK_INCOMPLETE;
+                actionPlan.push({
+                    operation: TaskOperation.MARK_INCOMPLETE,
+                    endpoint: \`/tasks/by-title/incomplete?title=\${safeTarget}\`,
+                    method: 'PATCH'
+                });
+                responseText = \`Marked "**\${target}**" as incomplete.\`;
+            }
+            else if (args.action === 'update_details') {
+                detectedIntentType = IntentType.UPDATE_TASK;
+
+                const updatePayload: any = {};
+                if (args.new_title) updatePayload.title = args.new_title;
+                if (args.new_description) updatePayload.description = args.new_description;
+                if (args.new_priority) updatePayload.priority = args.new_priority;
+                if (args.new_due_date) updatePayload.dueDate = args.new_due_date;
+                if (args.new_tags) {
+                    updatePayload.tags = args.new_tags.split(',').map((t: string) => t.trim().replace(/^#/, ''));
+                }
+
+                actionPlan.push({
+                    operation: TaskOperation.UPDATE,
+                    endpoint: \`/tasks/by-title?title=\${safeTarget}\`,
+                    method: 'PUT',
+                    payload: updatePayload
+                });
+                responseText = \`Updated details for "**\${target}**". 📝\`;
+            }
+          }
+
+          // --- SEARCH ---
+          else if (toolName === 'search_tasks') {
+            detectedIntentType = IntentType.SEARCH_TASKS;
+            const params = new URLSearchParams();
+            if (args.query) params.append('search', args.query);
+            if (args.priority) params.append('priority', args.priority);
+            if (args.status) params.append('status', args.status);
+
+            actionPlan.push({
+                operation: TaskOperation.SEARCH,
+                endpoint: \`/tasks?\${params.toString()}\`,
+                method: 'GET'
+            });
+            responseText = "Here are your tasks.";
+          }
+        }
+      }
+
+      // 5. Update Session
+      session.lastActiveAt = new Date();
+      session.context.lastIntent = detectedIntentType;
+      await AISessionModel.update(session);
+
+      return {
+        success: true,
+        data: {
+          responseText,
+          requiresConfirmation,
+          actionPlan,
+          detectedIntent: {
+            type: detectedIntentType,
+            confidence: 1.0,
+            parameters: {}
+          }
+        }
+      };
+
+    } catch (error) {
+      console.error('AI Agent Error:', error);
+      return {
+        success: false,
+        error: {
+          code: 'AI_PROCESSING_ERROR',
+          message: 'Failed to process AI request'
+        }
+      };
+    }
+  }
+
+  private async getSession(sessionId?: string, userId?: string): Promise<AIConversationSession> {
+    if (sessionId) {
+      const existingSession = await AISessionModel.get(sessionId);
+      if (existingSession) return existingSession;
+    }
+    return await AISessionModel.create(userId || 'anonymous', sessionId);
+  }
+}
+```
+
+### backend/src/types/ai.types.ts
+```typescript
+/**
+ * AI Types Module
+ * Defines TypeScript interfaces for AI-related data structures
+ */
+
+// Enum for different types of user intents
+export enum IntentType {
+  CREATE_TASK = 'CREATE_TASK',
+  UPDATE_TASK = 'UPDATE_TASK',
+  DELETE_TASK = 'DELETE_TASK',
+  SEARCH_TASKS = 'SEARCH_TASKS',
+  MARK_COMPLETE = 'MARK_COMPLETE',
+  MARK_INCOMPLETE = 'MARK_INCOMPLETE',
+  SET_PRIORITY = 'SET_PRIORITY',
+  SET_DUE_DATE = 'SET_DUE_DATE',
+  SET_REMINDER = 'SET_REMINDER',
+  CREATE_RECURRING_TASK = 'CREATE_RECURRING_TASK',
+  GREETING = 'GREETING',
+  UNKNOWN = 'UNKNOWN'
+}
+
+// Enum for priority levels
+export enum PriorityLevel {
+  HIGH = 'HIGH',
+  MEDIUM = 'MEDIUM',
+  LOW = 'LOW'
+}
+
+// Enum for recurrence patterns
+export enum RecurrencePattern {
+  DAILY = 'DAILY',
+  WEEKLY = 'WEEKLY',
+  MONTHLY = 'MONTHLY'
+}
+
+// Enum for task operation types
+export enum TaskOperation {
+  CREATE = 'CREATE',
+  UPDATE = 'UPDATE',
+  DELETE = 'DELETE',
+  SEARCH = 'SEARCH',
+  MARK_COMPLETE = 'MARK_COMPLETE',
+  MARK_INCOMPLETE = 'MARK_INCOMPLETE'
+}
+
+// Interface for extracted parameters from user input
+export interface ExtractedParameters {
+  taskTitle?: string;
+  taskDescription?: string;
+  taskId?: string;
+  priority?: PriorityLevel;
+  dueDate?: string; // ISO date string
+  category?: string;
+  tags?: string[];
+  recurrencePattern?: RecurrencePattern;
+  reminderOffset?: number; // minutes before due date
+}
+
+// Interface for detected user intent
+export interface UserIntent {
+  type: IntentType;
+  confidence: number; // 0-1 scale
+  parameters: ExtractedParameters;
+}
+
+// Interface for AI response structure
+export interface AIResponse {
+  id: string;
+  sessionId: string;
+  userInput: string;
+  detectedIntent: UserIntent;
+  actionPlan: TaskOperationPlan[];
+  responseText: string;
+  requiresConfirmation: boolean;
+  timestamp: Date;
+}
+
+// Interface for a planned task operation
+export interface TaskOperationPlan {
+  operation: TaskOperation;
+  endpoint: string;
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+  payload?: any;
+}
+
+// Interface for AI conversation session
+export interface AIConversationSession {
+  sessionId: string;
+  userId: string;
+  context: {
+    recentTasks?: string[]; // IDs of recently referenced tasks
+    lastIntent?: IntentType;
+    pendingConfirmation?: boolean;
+  };
+  createdAt: Date;
+  lastActiveAt: Date;
+  expiresAt: Date;
+}
+
+// Interface for AI chat request
+export interface AIChatRequest {
+  message: string;
+  sessionId?: string;
+}
+
+// Interface for AI chat response
+export interface AIChatResponse {
+  success: boolean;
+  data?: {
+    responseText: string;
+    requiresConfirmation: boolean;
+    actionPlan: TaskOperationPlan[];
+    detectedIntent: UserIntent;
+  };
+  error?: {
+    code: string;
+    message: string;
+  };
+}
+```
+
+### backend/src/models/ai-session.model.ts
+```typescript
+/**
+ * AI Session Model
+ * Represents an AI conversation session with context and memory
+ */
+
+import {
+  AIConversationSession,
+  IntentType
+} from '../types/ai.types';
+
+/**
+ * In-memory session store for demonstration purposes
+ * In a production environment, this would use Redis, database, or other persistent storage
+ */
+class InMemorySessionStore {
+  private sessions: Map<string, AIConversationSession> = new Map();
+  private readonly cleanupInterval: number = 300000; // 5 minutes
+  private cleanupTimer: NodeJS.Timeout | null = null;
+
+  constructor() {
+    this.startCleanupTimer();
+  }
+
+  async get(sessionId: string): Promise<AIConversationSession | null> {
+    const session = this.sessions.get(sessionId) || null;
+
+    // Check if session is expired and clean it up if needed
+    if (session && session.expiresAt && new Date() > new Date(session.expiresAt)) {
+      await this.delete(sessionId);
+      return null;
+    }
+
+    return session;
+  }
+
+  async set(session: AIConversationSession): Promise<void> {
+    this.sessions.set(session.sessionId, session);
+  }
+
+  async delete(sessionId: string): Promise<void> {
+    this.sessions.delete(sessionId);
+  }
+
+  async update(session: AIConversationSession): Promise<void> {
+    // Update last active timestamp
+    session.lastActiveAt = new Date();
+    this.sessions.set(session.sessionId, session);
+  }
+
+  /**
+   * Start periodic cleanup of expired sessions
+   */
+  private startCleanupTimer(): void {
+    this.cleanupTimer = setInterval(() => {
+      this.cleanupExpiredSessionsSync();
+    }, this.cleanupInterval);
+  }
+
+  /**
+   * Cleanup expired sessions synchronously
+   */
+  cleanupExpiredSessionsSync(): void {
+    const now = new Date();
+    for (const [sessionId, session] of this.sessions.entries()) {
+      if (session.expiresAt && now > new Date(session.expiresAt)) {
+        this.sessions.delete(sessionId);
+      }
+    }
+  }
+
+  /**
+   * Stop the cleanup timer
+   */
+  stopCleanupTimer(): void {
+    if (this.cleanupTimer) {
+      clearInterval(this.cleanupTimer);
+      this.cleanupTimer = null;
+    }
+  }
+}
+
+// Initialize the session store
+export const aiSessionStore = new InMemorySessionStore();
+
+/**
+ * AI Session Model
+ * Manages conversation session lifecycle and context
+ */
+export class AISessionModel {
+  /**
+   * Create a new AI conversation session
+   */
+  static async create(userId: string, sessionId?: string): Promise<AIConversationSession> {
+    const actualSessionId = sessionId || `sess_\${Date.now()}_\${Math.random().toString(36).substr(2, 9)}`;
+
+    const session: AIConversationSession = {
+      sessionId: actualSessionId,
+      userId,
+      context: {
+        recentTasks: [],
+        lastIntent: undefined,
+        pendingConfirmation: false
+      },
+      createdAt: new Date(),
+      lastActiveAt: new Date(),
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) // 24 hours
+    };
+
+    await aiSessionStore.set(session);
+    return session;
+  }
+
+  /**
+   * Get an existing AI conversation session
+   */
+  static async get(sessionId: string): Promise<AIConversationSession | null> {
+    return await aiSessionStore.get(sessionId);
+  }
+
+  /**
+   * Update an existing AI conversation session
+   */
+  static async update(session: AIConversationSession): Promise<AIConversationSession> {
+    session.lastActiveAt = new Date();
+    await aiSessionStore.update(session);
+    return session;
+  }
+
+  /**
+   * Delete an AI conversation session
+   */
+  static async delete(sessionId: string): Promise<void> {
+    await aiSessionStore.delete(sessionId);
+  }
+
+  /**
+   * Add a task ID to the recent tasks context
+   */
+  static async addRecentTask(sessionId: string, taskId: string): Promise<void> {
+    const session = await this.get(sessionId);
+    if (!session) {
+      throw new Error(\`Session \${sessionId} not found\`);
+    }
+
+    // Add task to recent tasks, keeping only the last 5
+    session.context.recentTasks = [taskId, ...(session.context.recentTasks || [])].slice(0, 5);
+    await this.update(session);
+  }
+
+  /**
+   * Update the last intent for the session
+   */
+  static async updateLastIntent(sessionId: string, intentType: string): Promise<void> {
+    const session = await this.get(sessionId);
+    if (!session) {
+      throw new Error(\`Session \${sessionId} not found\`);
+    }
+
+    session.context.lastIntent = intentType as IntentType;
+    await this.update(session);
+  }
+
+  /**
+   * Set pending confirmation status
+   */
+  static async setPendingConfirmation(sessionId: string, pending: boolean): Promise<void> {
+    const session = await this.get(sessionId);
+    if (!session) {
+      throw new Error(\`Session \${sessionId} not found\`);
+    }
+
+    session.context.pendingConfirmation = pending;
+    await this.update(session);
+  }
+
+  /**
+   * Clean up expired sessions
+   */
+  static async cleanupExpiredSessions(): Promise<void> {
+    aiSessionStore.cleanupExpiredSessionsSync();
+  }
+
+  /**
+   * Shutdown the session store gracefully
+   */
+  static async shutdown(): Promise<void> {
+    aiSessionStore.stopCleanupTimer();
+  }
+}
+```
+
+### backend/src/config/ai.config.ts
+```typescript
+import OpenAI from 'openai';
+
+export interface AIConfig {
+  apiKey: string;
+  modelName: string;
+  temperature: number;
+  maxTokens: number;
+  timeout: number;
+}
+
+export const aiConfig: AIConfig = {
+  apiKey: process.env.OPENAI_API_KEY || process.env.OPENROUTER_API_KEY || '',
+  modelName: process.env.MODEL_NAME || 'meta-llama/llama-3.3-70b-instruct:free',
+  temperature: parseFloat(process.env.AI_TEMPERATURE || '0.7'),
+  maxTokens: parseInt(process.env.AI_MAX_TOKENS || '500', 10),
+  timeout: parseInt(process.env.AI_TIMEOUT || '30000', 10) // 30 seconds
+};
+
+export function initializeOpenAIClient(): OpenAI {
+  const apiKey = aiConfig.apiKey;
+  if (!apiKey) {
+    throw new Error('AI API key is not configured. Please set OPENAI_API_KEY or OPENROUTER_API_KEY environment variable.');
+  }
+
+  return new OpenAI({
+    apiKey: apiKey,
+    baseURL: process.env.OPENROUTER_URL || undefined
+  });
+}
+```
+
+### backend/src/routes/ai.routes.ts
+```typescript
+import express, { Request, Response, Router } from 'express';
+import { aiConfig, initializeOpenAIClient } from '../config/ai.config';
+import { AIChatRequest, AIChatResponse } from '../types/ai.types';
+import { AI_Agent } from '../ai/agent';
+import { requireAuth } from '../middleware/auth.middleware';
+import { aiRateLimiter, validateAIChatInput, sanitizeAIResponse } from '../middleware/ai-security.middleware';
+
+// Initialize the AI agent
+const aiAgent = new AI_Agent(initializeOpenAIClient(), aiConfig);
+
+const router: Router = express.Router();
+
+/**
+ * POST /api/v1/ai/chat
+ * Process natural language input for todo management
+ */
+router.post('/chat', requireAuth, aiRateLimiter, validateAIChatInput, async (req: Request, res: Response) => {
+  try {
+    const { message, sessionId }: AIChatRequest = req.body;
+
+    // Process the AI chat request
+    const result: AIChatResponse = await aiAgent.processChat(message, sessionId, req.userId);
+
+    // Sanitize the response before sending
+    const sanitizedResult = sanitizeAIResponse(result);
+    res.status(200).json(sanitizedResult);
+  } catch (error) {
+    console.error('AI Chat Error:', error);
+
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'An error occurred processing your request'
+      }
+    });
+  }
+});
+
+export default router;
+```
+
+### backend/src/middleware/ai-security.middleware.ts
+```typescript
+import { Request, Response, NextFunction } from 'express';
+import rateLimit from 'express-rate-limit';
+import validator from 'validator';
+import { AIChatResponse } from '../types/ai.types';
+
+// Rate limiter for AI endpoints
+export const aiRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit each IP to 100 requests per windowMs
+  message: {
+    success: false,
+    error: {
+      code: 'RATE_LIMIT_EXCEEDED',
+      message: 'Too many requests from this IP address, please try again later.'
+    }
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Validate AI chat input
+export const validateAIChatInput = (req: Request, res: Response, next: NextFunction) => {
+  const { message, sessionId } = req.body;
+
+  // Validate message
+  if (!message || typeof message !== 'string' || message.trim().length === 0) {
+    return res.status(400).json({
+      success: false,
+      error: {
+        code: 'INVALID_INPUT',
+        message: 'Message is required and must be a non-empty string'
+      }
+    });
+  }
+
+  // Validate message length
+  if (message.length > 1000) {
+    return res.status(400).json({
+      success: false,
+      error: {
+        code: 'MESSAGE_TOO_LONG',
+        message: 'Message must be less than 1000 characters'
+      }
+    });
+  }
+
+  // Validate session ID if provided
+  if (sessionId && (typeof sessionId !== 'string' || !validator.isUUID(sessionId))) {
+    return res.status(400).json({
+      success: false,
+      error: {
+        code: 'INVALID_SESSION_ID',
+        message: 'Session ID must be a valid UUID if provided'
+      }
+    });
+  }
+
+  next();
+};
+
+// Sanitize AI response to prevent XSS and other security issues
+export const sanitizeAIResponse = (response: AIChatResponse): AIChatResponse => {
+  if (!response) return response;
+
+  // Deep clone to avoid mutating the original response
+  const sanitized = JSON.parse(JSON.stringify(response));
+
+  if (sanitized.data?.responseText) {
+    // Sanitize the response text
+    sanitized.data.responseText = validator.escape(sanitized.data.responseText);
+  }
+
+  if (sanitized.error?.message) {
+    // Sanitize error message
+    sanitized.error.message = validator.escape(sanitized.error.message);
+  }
+
+  return sanitized;
+};
+```
+
+### backend/src/index.ts
+```typescript
+import express from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+import compression from 'compression';
+import { rateLimit } from 'express-rate-limit';
+import { connectDB } from './config/database.config';
+import { errorHandler } from './middleware/error.middleware';
+import { requireAuth } from './middleware/auth.middleware';
+import aiRoutes from './routes/ai.routes';
+import taskRoutes from './routes/tasks.routes';
+import authRoutes from './routes/auth.routes';
+import { AISessionModel } from './models/ai-session.model';
+
+// Create Express app
+const app = express();
+const PORT = process.env.PORT || 5006;
+
+// Security middleware
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'", "fonts.googleapis.com"],
+      fontSrc: ["'self'", "fonts.gstatic.com"],
+      imgSrc: ["'self'", "data:", "https:"],
+      scriptSrc: ["'self'"]
+    }
+  }
+}));
+
+// Enable CORS with specific origin in production
+app.use(cors({
+  origin: process.env.NODE_ENV === 'production'
+    ? process.env.FRONTEND_URL
+    : ['http://localhost:5173', 'http://localhost:3000'],
+  credentials: true
+}));
+
+// Rate limiting
+app.use(rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100 // Limit each IP to 100 requests per windowMs
+}));
+
+// Body parsing middleware
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true }));
+
+// Compression middleware
+app.use(compression());
+
+// Database connection
+connectDB();
+
+// Routes
+app.use('/api/v1/ai', aiRoutes);
+app.use('/api/v1/tasks', taskRoutes);
+app.use('/api/v1/auth', authRoutes);
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'OK', timestamp: new Date().toISOString() });
+});
+
+// Error handling middleware (should be last)
+app.use(errorHandler);
+
+// Graceful shutdown
+process.on('SIGTERM', async () => {
+  console.log('SIGTERM received, shutting down gracefully');
+  await AISessionModel.shutdown();
+  process.exit(0);
+});
+
+process.on('SIGINT', async () => {
+  console.log('SIGINT received, shutting down gracefully');
+  await AISessionModel.shutdown();
+  process.exit(0);
+});
+
+// Start server
+app.listen(PORT, () => {
+  console.log(\`Server running on port \${PORT}\`);
+  console.log(\`Environment: \${process.env.NODE_ENV || 'development'}\`);
+});
+
+export default app;
+```
+
+### backend/src/routes/index.ts
+```typescript
+import { Router } from 'express';
+import aiRoutes from './ai.routes';
+import taskRoutes from './tasks.routes';
+import authRoutes from './auth.routes';
+
+const router: Router = Router();
+
+// Mount all routes under their respective paths
+router.use('/ai', aiRoutes);
+router.use('/tasks', taskRoutes);
+router.use('/auth', authRoutes);
+
+export default router;
+```
+
+### backend/src/routes/tasks.routes.ts
+```typescript
+import { Router, Request, Response } from 'express';
+import { TaskService } from '../services/task.service';
+import { requireAuth } from '../middleware/auth.middleware';
+import { validateTaskInput, validateTaskUpdate } from '../middleware/validate.middleware';
+import { Task } from '../models/task.model';
+
+const router: Router = Router();
+const taskService = new TaskService();
+
+/**
+ * GET /api/v1/tasks
+ * Get all tasks for the authenticated user
+ */
+router.get('/', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const userId = req.userId!;
+    const filters = {
+      priority: req.query.priority as string,
+      status: req.query.status as string,
+      search: req.query.search as string,
+      limit: req.query.limit ? parseInt(req.query.limit as string, 10) : undefined,
+      offset: req.query.offset ? parseInt(req.query.offset as string, 10) : undefined
+    };
+
+    const tasks = await taskService.getAllTasks(userId, filters);
+    res.status(200).json({ success: true, data: { tasks } });
+  } catch (error) {
+    res.status(500).json({ success: false, error: { message: 'Failed to fetch tasks' } });
+  }
+});
+
+/**
+ * GET /api/v1/tasks/:id
+ * Get a specific task by ID
+ */
+router.get('/:id', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const userId = req.userId!;
+    const taskId = req.params.id;
+
+    const task = await taskService.getTaskById(taskId, userId);
+    if (!task) {
+      return res.status(404).json({ success: false, error: { message: 'Task not found' } });
+    }
+
+    res.status(200).json({ success: true, data: { task } });
+  } catch (error) {
+    res.status(500).json({ success: false, error: { message: 'Failed to fetch task' } });
+  }
+});
+
+/**
+ * GET /api/v1/tasks/by-title
+ * Find task by title
+ */
+router.get('/by-title', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const userId = req.userId!;
+    const title = req.query.title as string;
+
+    if (!title) {
+      return res.status(400).json({ success: false, error: { message: 'Title parameter is required' } });
+    }
+
+    const task = await taskService.findTaskByTitle(title, userId);
+    if (!task) {
+      return res.status(404).json({ success: false, error: { message: 'Task not found' } });
+    }
+
+    res.status(200).json({ success: true, data: { task } });
+  } catch (error) {
+    res.status(500).json({ success: false, error: { message: 'Failed to find task by title' } });
+  }
+});
+
+/**
+ * POST /api/v1/tasks
+ * Create a new task
+ */
+router.post('/', requireAuth, validateTaskInput, async (req: Request, res: Response) => {
+  try {
+    const userId = req.userId!;
+    const taskData = req.body as Omit<Task, 'id' | 'userId' | 'createdAt' | 'updatedAt'>;
+
+    const newTask = await taskService.createTask({
+      ...taskData,
+      userId,
+      completed: taskData.completed ?? false
+    });
+
+    res.status(201).json({ success: true, data: { task: newTask } });
+  } catch (error) {
+    res.status(500).json({ success: false, error: { message: 'Failed to create task' } });
+  }
+});
+
+/**
+ * PUT /api/v1/tasks/:id
+ * Update a task by ID
+ */
+router.put('/:id', requireAuth, validateTaskUpdate, async (req: Request, res: Response) => {
+  try {
+    const userId = req.userId!;
+    const taskId = req.params.id;
+    const updateData = req.body;
+
+    const updatedTask = await taskService.updateTask(taskId, userId, updateData);
+    if (!updatedTask) {
+      return res.status(404).json({ success: false, error: { message: 'Task not found' } });
+    }
+
+    res.status(200).json({ success: true, data: { task: updatedTask } });
+  } catch (error) {
+    res.status(500).json({ success: false, error: { message: 'Failed to update task' } });
+  }
+});
+
+/**
+ * PUT /api/v1/tasks/by-title
+ * Update a task by title
+ */
+router.put('/by-title', requireAuth, validateTaskUpdate, async (req: Request, res: Response) => {
+  try {
+    const userId = req.userId!;
+    const title = req.query.title as string;
+    const updateData = req.body;
+
+    if (!title) {
+      return res.status(400).json({ success: false, error: { message: 'Title parameter is required' } });
+    }
+
+    const updatedTask = await taskService.updateTaskByTitle(title, userId, updateData);
+    if (!updatedTask) {
+      return res.status(404).json({ success: false, error: { message: 'Task not found' } });
+    }
+
+    res.status(200).json({ success: true, data: { task: updatedTask } });
+  } catch (error) {
+    res.status(500).json({ success: false, error: { message: 'Failed to update task by title' } });
+  }
+});
+
+/**
+ * PATCH /api/v1/tasks/:id/complete
+ * Mark a task as complete
+ */
+router.patch('/:id/complete', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const userId = req.userId!;
+    const taskId = req.params.id;
+
+    const updatedTask = await taskService.updateTask(taskId, userId, { completed: true });
+    if (!updatedTask) {
+      return res.status(404).json({ success: false, error: { message: 'Task not found' } });
+    }
+
+    res.status(200).json({ success: true, data: { task: updatedTask } });
+  } catch (error) {
+    res.status(500).json({ success: false, error: { message: 'Failed to update task' } });
+  }
+});
+
+/**
+ * PATCH /api/v1/tasks/by-title/complete
+ * Mark a task as complete by title
+ */
+router.patch('/by-title/complete', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const userId = req.userId!;
+    const title = req.query.title as string;
+
+    if (!title) {
+      return res.status(400).json({ success: false, error: { message: 'Title parameter is required' } });
+    }
+
+    const updatedTask = await taskService.updateTaskByTitle(title, userId, { completed: true });
+    if (!updatedTask) {
+      return res.status(404).json({ success: false, error: { message: 'Task not found' } });
+    }
+
+    res.status(200).json({ success: true, data: { task: updatedTask } });
+  } catch (error) {
+    res.status(500).json({ success: false, error: { message: 'Failed to update task by title' } });
+  }
+});
+
+/**
+ * PATCH /api/v1/tasks/by-title/incomplete
+ * Mark a task as incomplete by title
+ */
+router.patch('/by-title/incomplete', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const userId = req.userId!;
+    const title = req.query.title as string;
+
+    if (!title) {
+      return res.status(400).json({ success: false, error: { message: 'Title parameter is required' } });
+    }
+
+    const updatedTask = await taskService.updateTaskByTitle(title, userId, { completed: false });
+    if (!updatedTask) {
+      return res.status(404).json({ success: false, error: { message: 'Task not found' } });
+    }
+
+    res.status(200).json({ success: true, data: { task: updatedTask } });
+  } catch (error) {
+    res.status(500).json({ success: false, error: { message: 'Failed to update task by title' } });
+  }
+});
+
+/**
+ * DELETE /api/v1/tasks/:id
+ * Delete a task by ID
+ */
+router.delete('/:id', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const userId = req.userId!;
+    const taskId = req.params.id;
+
+    const deletedTask = await taskService.deleteTask(taskId, userId);
+    if (!deletedTask) {
+      return res.status(404).json({ success: false, error: { message: 'Task not found' } });
+    }
+
+    res.status(200).json({ success: true, data: { task: deletedTask } });
+  } catch (error) {
+    res.status(500).json({ success: false, error: { message: 'Failed to delete task' } });
+  }
+});
+
+/**
+ * DELETE /api/v1/tasks/by-title
+ * Delete a task by title
+ */
+router.delete('/by-title', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const userId = req.userId!;
+    const title = req.query.title as string;
+
+    if (!title) {
+      return res.status(400).json({ success: false, error: { message: 'Title parameter is required' } });
+    }
+
+    const deletedTask = await taskService.deleteTaskByTitle(title, userId);
+    if (!deletedTask) {
+      return res.status(404).json({ success: false, error: { message: 'Task not found' } });
+    }
+
+    res.status(200).json({ success: true, data: { task: deletedTask } });
+  } catch (error) {
+    res.status(500).json({ success: false, error: { message: 'Failed to delete task by title' } });
+  }
+});
+
+export default router;
+```
+
+### backend/src/routes/auth.routes.ts
+```typescript
+import { Router, Request, Response } from 'express';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import { User } from '../models/user.model';
+import { validateAuthInput } from '../middleware/validate.middleware';
+
+const router: Router = Router();
+
+/**
+ * POST /api/v1/auth/signup
+ * Register a new user
+ */
+router.post('/signup', validateAuthInput, async (req: Request, res: Response) => {
+  try {
+    const { email, password, name } = req.body;
+
+    // Check if user already exists
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(409).json({
+        success: false,
+        error: { message: 'User with this email already exists' }
+      });
+    }
+
+    // Hash the password
+    const saltRounds = 10;
+    const hashedPassword = await bcrypt.hash(password, saltRounds);
+
+    // Create new user
+    const newUser = new User({
+      email,
+      password: hashedPassword,
+      name
+    });
+
+    await newUser.save();
+
+    // Generate JWT token
+    const token = jwt.sign(
+      { userId: newUser._id, email: newUser.email },
+      process.env.JWT_SECRET || 'fallback_secret_key',
+      { expiresIn: '24h' }
+    );
+
+    res.status(201).json({
+      success: true,
+      data: {
+        user: {
+          id: newUser._id,
+          email: newUser.email,
+          name: newUser.name
+        },
+        token
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: { message: 'Registration failed' }
+    });
+  }
+});
+
+/**
+ * POST /api/v1/auth/signin
+ * Authenticate a user
+ */
+router.post('/signin', validateAuthInput, async (req: Request, res: Response) => {
+  try {
+    const { email, password } = req.body;
+
+    // Find user by email
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        error: { message: 'Invalid email or password' }
+      });
+    }
+
+    // Verify password
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) {
+      return res.status(401).json({
+        success: false,
+        error: { message: 'Invalid email or password' }
+      });
+    }
+
+    // Generate JWT token
+    const token = jwt.sign(
+      { userId: user._id, email: user.email },
+      process.env.JWT_SECRET || 'fallback_secret_key',
+      { expiresIn: '24h' }
+    );
+
+    res.status(200).json({
+      success: true,
+      data: {
+        user: {
+          id: user._id,
+          email: user.email,
+          name: user.name
+        },
+        token
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: { message: 'Authentication failed' }
+    });
+  }
+});
+
+export default router;
+```
+
+### backend/src/services/task.service.ts
+```typescript
+import { Task } from '../models/task.model';
+import { IUser } from '../models/user.model';
+
+export interface TaskFilters {
+  priority?: string;
+  status?: string;
+  search?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export class TaskService {
+  /**
+   * Get all tasks for a user with optional filters
+   */
+  async getAllTasks(userId: string, filters?: TaskFilters): Promise<Task[]> {
+    const query: any = { userId };
+
+    // Apply filters
+    if (filters?.priority) {
+      query.priority = filters.priority;
+    }
+
+    if (filters?.status) {
+      if (filters.status === 'completed') {
+        query.completed = true;
+      } else if (filters.status === 'pending') {
+        query.completed = false;
+      }
+    }
+
+    if (filters?.search) {
+      query.title = { $regex: filters.search, $options: 'i' }; // Case-insensitive search
+    }
+
+    // Build the query with potential filters
+    let taskQuery = Task.find(query);
+
+    // Apply pagination if specified
+    if (filters?.limit !== undefined) {
+      taskQuery = taskQuery.limit(filters.limit);
+      if (filters?.offset !== undefined) {
+        taskQuery = taskQuery.skip(filters.offset);
+      }
+    }
+
+    // Sort by creation date (newest first)
+    taskQuery = taskQuery.sort({ createdAt: -1 });
+
+    return await taskQuery.exec();
+  }
+
+  /**
+   * Get a specific task by ID
+   */
+  async getTaskById(taskId: string, userId: string): Promise<Task | null> {
+    return await Task.findOne({ _id: taskId, userId }).exec();
+  }
+
+  /**
+   * Find a task by title
+   */
+  async findTaskByTitle(title: string, userId: string): Promise<Task | null> {
+    return await Task.findOne({ title: { $regex: new RegExp(`^\${title}$`, 'i') }, userId }).exec();
+  }
+
+  /**
+   * Create a new task
+   */
+  async createTask(taskData: Partial<Task>): Promise<Task> {
+    const newTask = new Task(taskData);
+    return await newTask.save();
+  }
+
+  /**
+   * Update a task by ID
+   */
+  async updateTask(taskId: string, userId: string, updateData: Partial<Task>): Promise<Task | null> {
+    return await Task.findOneAndUpdate(
+      { _id: taskId, userId },
+      { ...updateData, updatedAt: new Date() },
+      { new: true } // Return updated document
+    ).exec();
+  }
+
+  /**
+   * Update a task by title
+   */
+  async updateTaskByTitle(title: string, userId: string, updateData: Partial<Task>): Promise<Task | null> {
+    return await Task.findOneAndUpdate(
+      { title: { $regex: new RegExp(`^\${title}$`, 'i') }, userId },
+      { ...updateData, updatedAt: new Date() },
+      { new: true } // Return updated document
+    ).exec();
+  }
+
+  /**
+   * Delete a task by ID
+   */
+  async deleteTask(taskId: string, userId: string): Promise<Task | null> {
+    return await Task.findOneAndDelete({ _id: taskId, userId }).exec();
+  }
+
+  /**
+   * Delete a task by title
+   */
+  async deleteTaskByTitle(title: string, userId: string): Promise<Task | null> {
+    return await Task.findOneAndDelete({ title: { $regex: new RegExp(`^\${title}$`, 'i') }, userId }).exec();
+  }
+}
+```
+
+### backend/src/config/database.config.ts
+```typescript
+import mongoose from 'mongoose';
+
+export const connectDB = async (): Promise<void> => {
+  try {
+    const conn = await mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/todo-app');
+    console.log(\`MongoDB Connected: \${conn.connection.host}\`);
+  } catch (error) {
+    console.error('Database connection error:', error);
+    process.exit(1);
+  }
+};
+
+// Close database connection on exit
+process.on('SIGINT', async () => {
+  await mongoose.connection.close();
+  console.log('MongoDB connection closed through app termination');
+  process.exit(0);
+});
+```
+
+### backend/src/middleware/auth.middleware.ts
+```typescript
+import { Request, Response, NextFunction } from 'express';
+import jwt from 'jsonwebtoken';
+
+// Extend the Express Request type to include userId
+declare global {
+  namespace Express {
+    interface Request {
+      userId?: string;
+    }
+  }
+}
+
+export const requireAuth = (req: Request, res: Response, next: NextFunction) => {
+  // Get token from header
+  const token = req.header('Authorization')?.replace('Bearer ', '');
+
+  if (!token) {
+    return res.status(401).json({
+      success: false,
+      error: { message: 'Access denied. No token provided.' }
+    });
+  }
+
+  try {
+    // Verify token
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'fallback_secret_key') as { userId: string };
+
+    // Add user ID to request object
+    req.userId = decoded.userId;
+
+    next();
+  } catch (error) {
+    res.status(400).json({
+      success: false,
+      error: { message: 'Invalid token.' }
+    });
+  }
+};
+```
+
+### backend/src/middleware/error.middleware.ts
+```typescript
+import { Request, Response, NextFunction } from 'express';
+
+export const errorHandler = (err: any, req: Request, res: Response, next: NextFunction) => {
+  console.error(err.stack);
+
+  // Default error
+  let statusCode = 500;
+  let message = 'Internal Server Error';
+
+  // Mongoose validation error
+  if (err.name === 'ValidationError') {
+    statusCode = 400;
+    message = Object.values(err.errors).map((error: any) => error.message).join(', ');
+  }
+
+  // Cast error (invalid ObjectId)
+  if (err.name === 'CastError') {
+    statusCode = 400;
+    message = 'Invalid ID format';
+  }
+
+  // Duplicate key error
+  if (err.code === 11000) {
+    statusCode = 409;
+    message = 'Duplicate field value entered';
+  }
+
+  res.status(statusCode).json({
+    success: false,
+    error: {
+      message,
+      ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
+    }
+  });
+};
+```
+
+### backend/src/utils/response.utils.ts
+```typescript
+export interface ApiResponse<T = any> {
+  success: boolean;
+  data?: T;
+  error?: {
+    code?: string;
+    message: string;
+  };
+}
+
+/**
+ * Utility function to create a standardized success response
+ */
+export const createSuccessResponse = <T>(data?: T): ApiResponse<T> => {
+  return {
+    success: true,
+    data
+  };
+};
+
+/**
+ * Utility function to create a standardized error response
+ */
+export const createErrorResponse = (message: string, code?: string): ApiResponse => {
+  return {
+    success: false,
+    error: {
+      message,
+      code
+    }
+  };
+};
+
+/**
+ * Middleware to add response utility functions to the response object
+ */
+export const addResponseUtils = (req: any, res: any, next: any) => {
+  res.success = (data?: any, statusCode = 200) => {
+    res.status(statusCode).json(createSuccessResponse(data));
+  };
+
+  res.error = (message: string, statusCode = 500, code?: string) => {
+    res.status(statusCode).json(createErrorResponse(message, code));
+  };
+
+  next();
+};
+```
+
+### backend/src/models/task.model.ts
+```typescript
+import mongoose, { Document, Schema } from 'mongoose';
+
+export interface ITask extends Document {
+  title: string;
+  description?: string;
+  completed: boolean;
+  priority: 'low' | 'medium' | 'high';
+  dueDate?: Date;
+  category?: string;
+  tags: string[];
+  userId: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const taskSchema: Schema = new Schema({
+  title: {
+    type: String,
+    required: [true, 'Task title is required'],
+    trim: true,
+    maxlength: [200, 'Title cannot exceed 200 characters']
+  },
+  description: {
+    type: String,
+    trim: true,
+    maxlength: [1000, 'Description cannot exceed 1000 characters']
+  },
+  completed: {
+    type: Boolean,
+    default: false
+  },
+  priority: {
+    type: String,
+    enum: ['low', 'medium', 'high'],
+    default: 'medium'
+  },
+  dueDate: {
+    type: Date
+  },
+  category: {
+    type: String,
+    trim: true,
+    maxlength: [50, 'Category cannot exceed 50 characters']
+  },
+  tags: [{
+    type: String,
+    trim: true,
+    maxlength: [30, 'Tag cannot exceed 30 characters']
+  }],
+  userId: {
+    type: String,
+    required: true,
+    ref: 'User'
+  }
+}, {
+  timestamps: true
+});
+
+// Index for efficient querying by user and status
+taskSchema.index({ userId: 1, completed: 1 });
+taskSchema.index({ userId: 1, priority: 1 });
+taskSchema.index({ userId: 1, dueDate: 1 });
+taskSchema.index({ title: 1, userId: 1 }); // For title-based searches
+
+export const Task = mongoose.model<ITask>('Task', taskSchema);
+```
+
+### backend/src/models/types.ts
+```typescript
+// This file contains shared type definitions used across the backend
+
+export interface BaseModel {
+  id: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface PaginatedResult<T> {
+  data: T[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
+```
+
+## Frontend Components
+
+### frontend/src/App.tsx
+```typescript
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { AuthProvider } from './context/AuthContext';
+import { ProtectedRoute } from './components/ProtectedRoute';
+import { HomePage } from './pages/HomePage';
+import { SignupPage } from './pages/SignupPage';
+import { SigninPage } from './pages/SigninPage';
+import { DashboardPage } from './pages/DashboardPage';
+import './styles/globals.css';
+
+/**
+ * Root App Component
+ * Sets up routing structure and global providers
+ */
+
+function App() {
+  return (
+    <AuthProvider>
+      <BrowserRouter>
+        <Routes>
+          {/* Homepage */}
+          <Route path="/" element={<HomePage />} />
+
+          {/* Auth routes */}
+          <Route path="/signup" element={<SignupPage />} />
+          <Route path="/signin" element={<SigninPage />} />
+
+          {/* Protected routes */}
+          <Route
+            path="/dashboard"
+            element={
+              <ProtectedRoute>
+                <DashboardPage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* 404 Not Found */}
+          <Route path="*" element={<NotFound />} />
+        </Routes>
+      </BrowserRouter>
+    </AuthProvider>
+  );
+}
+
+function NotFound() {
+  return (
+    <div className="flex items-center justify-center min-h-screen">
+      <div className="text-center">
+        <h1 className="text-6xl font-bold text-gray-900 mb-4">404</h1>
+        <p className="text-gray-600">Page not found</p>
+      </div>
+    </div>
+  );
+}
+
+export default App;
+```
+
+### frontend/src/containers/AIChatContainer.tsx
+```typescript
+import React, { useState, useRef, useEffect } from 'react';
+import { useAIChat } from '../hooks/useAIChat';
+import ChatMessage from '../components/ChatMessage';
+
+interface AIChatContainerProps {
+  onTasksUpdated?: () => void;
+}
+
+const AIChatContainer: React.FC<AIChatContainerProps> = ({ onTasksUpdated }) => {
+  const {
+    messages,
+    sendMessage,
+    isLoading,
+    requiresConfirmation,
+    handleConfirmation,
+  } = useAIChat(onTasksUpdated);
+  const [inputValue, setInputValue] = useState('');
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Scroll to bottom of messages when new messages are added
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!inputValue.trim() || isLoading || requiresConfirmation) return;
+
+    // Send message to AI backend
+    await sendMessage(inputValue);
+
+    setInputValue('');
+  };
+
+  return (
+    <div className="flex flex-col h-full border border-dark-700 rounded-xl shadow-lg bg-dark-800/70 backdrop-blur-xl">
+      {/* Chat Header */}
+      <div className="bg-dark-700/50 px-4 py-3 border-b border-dark-600 rounded-t-xl">
+        <h3 className="font-semibold text-dark-100">AI Todo Assistant</h3>
+        <p className="text-xs text-dark-400">Ask me to manage your tasks using natural language</p>
+      </div>
+
+      {/* Messages Container */}
+      <div className="flex-1 overflow-y-auto p-4 bg-dark-900/30" style={{ maxHeight: '400px' }}>
+        {messages.length === 0 ? (
+          <div className="text-center text-dark-400 italic mt-8">
+            Start a conversation with the AI assistant to manage your tasks...
+          </div>
+        ) : (
+          messages.map((message) => (
+            <ChatMessage
+              key={message.id}
+              message={message}
+              onConfirm={message.requiresConfirmation ? (confirmed) => handleConfirmation(confirmed) : undefined}
+              isConfirming={isLoading}
+            />
+          ))
+        )}
+        {isLoading && (
+          <div className="flex justify-start mb-4">
+            <div className="bg-dark-700 text-dark-200 rounded-lg rounded-bl-none px-4 py-2">
+              <div className="flex space-x-2">
+                <div className="w-2 h-2 bg-dark-400 rounded-full animate-bounce"></div>
+                <div className="w-2 h-2 bg-dark-400 rounded-full animate-bounce delay-100"></div>
+                <div className="w-2 h-2 bg-dark-400 rounded-full animate-bounce delay-200"></div>
+              </div>
+            </div>
+          </div>
+        )}
+        <div ref={messagesEndRef} />
+      </div>
+
+      {/* Confirmation Modal - shown when confirmation is required */}
+      {requiresConfirmation && (
+        <div className="absolute inset-0 bg-black bg-opacity-70 backdrop-blur-sm flex items-center justify-center z-10">
+          <div className="bg-dark-800 p-6 rounded-xl shadow-2xl max-w-md w-full mx-4 border border-dark-600">
+            <h4 className="text-lg font-semibold text-dark-100 mb-2">Confirm Action</h4>
+            <p className="text-dark-300 mb-4">Are you sure you want to proceed with this action?</p>
+            <div className="flex justify-end space-x-3">
+              <button
+                type="button"
+                className="px-4 py-2 text-sm font-medium text-dark-300 bg-dark-700 border border-dark-600 rounded-lg hover:bg-dark-600 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                onClick={() => handleConfirmation(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="px-4 py-2 text-sm font-medium text-white bg-red-600 border border-red-500 rounded-lg hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500"
+                onClick={() => handleConfirmation(true)}
+              >
+                Confirm
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Input Area */}
+      <div className="border-t border-dark-600 p-4 bg-dark-700/30 rounded-b-xl">
+        <form onSubmit={handleSubmit} className="flex gap-2">
+          <input
+            type="text"
+            value={inputValue}
+            onChange={(e) => setInputValue(e.target.value)}
+            placeholder="Ask me to manage your tasks (e.g., 'Add a task to buy groceries')"
+            className="flex-1 border border-dark-600 rounded-lg px-4 py-2 bg-dark-700 text-dark-50 placeholder:text-dark-400 focus:outline-none focus:ring-2 focus:ring-primary-500"
+            disabled={isLoading || requiresConfirmation}
+          />
+          <button
+            type="submit"
+            disabled={!inputValue.trim() || isLoading || requiresConfirmation}
+            className={`px-4 py-2 rounded-lg \${
+              inputValue.trim() && !isLoading && !requiresConfirmation
+                ? 'bg-primary-600 text-white hover:bg-primary-500'
+                : 'bg-dark-600 text-dark-400 cursor-not-allowed'
+            }`}
+          >
+            Send
+          </button>
+        </form>
+        <p className="text-xs text-dark-400 mt-2">
+          Examples: "Add a task to buy groceries", "Mark my meeting as complete", "Show high-priority tasks"
+        </p>
+      </div>
+    </div>
+  );
+};
+
+export default AIChatContainer;
+```
+
+### frontend/src/hooks/useAIChat.ts
+```typescript
+import { useState, useCallback } from 'react';
+import {
+  AIChatMessage,
+  AIChatRequest,
+} from '../types/ai.types';
+import { aiApiService as aiApi } from '../services/ai.api';
+
+interface UseAIChatReturn {
+  messages: AIChatMessage[];
+  sendMessage: (message: string) => Promise<void>;
+  isLoading: boolean;
+  requiresConfirmation: boolean;
+  handleConfirmation: (confirmed: boolean) => Promise<void>;
+  sessionId: string | null;
+}
+
+export const useAIChat = (onTasksUpdated?: () => void): UseAIChatReturn => {
+  const [messages, setMessages] = useState<AIChatMessage[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [requiresConfirmation, setRequiresConfirmation] = useState(false);
+  const [pendingAction, setPendingAction] = useState<any>(null);
+
+  // Function to execute action plans generated by the AI
+  const executeActionPlans = useCallback(async (actionPlans: any[]) => {
+    for (const plan of actionPlans) {
+      try {
+        if (plan.operation && plan.endpoint && plan.method) {
+          // Make the API call based on the action plan
+          const apiUrl = `\${import.meta.env.VITE_API_URL || 'http://localhost:5006/api/v1'}\${plan.endpoint}`;
+
+          console.log(\`[Exec] Auto-executing action: \${plan.method} \${plan.endpoint}\`);
+
+          const response = await fetch(apiUrl, {
+            method: plan.method,
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: plan.payload ? JSON.stringify(plan.payload) : undefined,
+            credentials: 'include' // Ensure session cookies are included
+          });
+
+          if (!response.ok) {
+            console.error(\`Failed to execute action plan: \${plan.operation}\`, await response.text());
+          } else {
+            console.log(\`Successfully executed action plan: \${plan.operation}\`);
+
+            // Notify parent component that tasks may have been updated
+            if (onTasksUpdated) {
+              onTasksUpdated();
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error executing action plan:', error);
+      }
+    }
+  }, [onTasksUpdated]);
+
+  // Function to handle sending messages to the AI
+  const sendMessage = useCallback(async (message: string) => {
+    if (isLoading) return;
+
+    setIsLoading(true);
+    setRequiresConfirmation(false);
+
+    try {
+      // Add user message to the chat
+      const userMessage: AIChatMessage = {
+        id: Date.now().toString(),
+        content: message,
+        role: 'user',
+        timestamp: new Date().toISOString()
+      };
+
+      setMessages(prev => [...prev, userMessage]);
+
+      // Prepare the AI request
+      const aiRequest: AIChatRequest = {
+        message,
+      };
+
+      // Send the request to the AI API
+      const response = await aiApi.chat(aiRequest);
+
+      // Handle the AI response
+      if (response.success && response.data) {
+        const aiMessage: AIChatMessage = {
+          id: (Date.now() + 1).toString(),
+          content: response.data.responseText,
+          role: 'assistant',
+          timestamp: new Date().toISOString(),
+          // Force confirmation to false in the UI message
+          requiresConfirmation: false,
+          actionPlan: response.data.actionPlan
+        };
+
+        setMessages(prev => [...prev, aiMessage]);
+
+        // --- KEY CHANGE: AUTO-EXECUTE INSTEAD OF ASKING ---
+        if (response.data.actionPlan && response.data.actionPlan.length > 0) {
+           // Direct execution, skipping setRequiresConfirmation(true)
+           await executeActionPlans(response.data.actionPlan);
+        }
+      } else {
+        // Add error message to the chat
+        const errorMessage: AIChatMessage = {
+          id: (Date.now() + 1).toString(),
+          content: response.error?.message || 'Unknown error occurred',
+          role: 'assistant',
+          timestamp: new Date().toISOString()
+        };
+
+        setMessages(prev => [...prev, errorMessage]);
+      }
+
+    } catch (error) {
+      console.error('Error sending message:', error);
+
+      // Add error message to the chat
+      const errorMessage: AIChatMessage = {
+        id: (Date.now() + 1).toString(),
+        content: 'Sorry, I encountered an error processing your request.',
+        role: 'assistant',
+        timestamp: new Date().toISOString()
+      };
+
+      setMessages(prev => [...prev, errorMessage]);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [isLoading, executeActionPlans]); // Added executeActionPlans to dependencies
+
+  // Function to handle confirmation of action plans
+  // (Kept for compatibility, but largely bypassed now)
+  const handleConfirmation = useCallback(async (confirmed: boolean) => {
+    if (!confirmed || !pendingAction) {
+      setRequiresConfirmation(false);
+      setPendingAction(null);
+      return;
+    }
+
+    // Execute the confirmed action plans
+    await executeActionPlans(pendingAction);
+
+    setRequiresConfirmation(false);
+    setPendingAction(null);
+  }, [pendingAction, executeActionPlans]);
+
+  return {
+    messages,
+    sendMessage,
+    isLoading,
+    requiresConfirmation,
+    handleConfirmation,
+    sessionId: null
+  };
+};
+```
+
+### frontend/src/components/ChatMessage.tsx
+```typescript
+import React from 'react';
+
+interface ChatMessageProps {
+  message: {
+    id: string;
+    role: 'user' | 'assistant' | 'ai'; // Supporting both formats
+    content: string;
+    timestamp: string | Date; // Supporting both formats
+    requiresConfirmation?: boolean;
+    actionPlan?: any;
+  };
+  onConfirm?: (confirmed: boolean) => void;
+  isConfirming?: boolean;
+}
+
+const ChatMessage: React.FC<ChatMessageProps> = ({ message, onConfirm, isConfirming }) => {
+  const isUser = message.role === 'user';
+
+  return (
+    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-4`}>
+      <div
+        className={`max-w-xs md:max-w-md lg:max-w-lg xl:max-w-xl px-4 py-2 rounded-lg \${
+          isUser
+            ? 'bg-primary-600 text-white rounded-br-none'
+            : 'bg-dark-700 text-dark-200 rounded-bl-none border border-dark-600'
+        }`}
+      >
+        <div className="text-sm">{message.content}</div>
+        {message.requiresConfirmation && onConfirm && (
+          <div className="mt-2 space-y-2">
+            <div className="text-xs bg-yellow-500/20 text-yellow-300 p-2 rounded border border-yellow-500/30">
+              ⚠️ This action requires confirmation
+            </div>
+            <div className="flex space-x-2">
+              <button
+                onClick={() => onConfirm(true)}
+                disabled={isConfirming}
+                className="px-3 py-1 bg-green-600 text-white text-xs rounded hover:bg-green-700 disabled:opacity-50"
+              >
+                {isConfirming ? 'Confirming...' : 'Yes'}
+              </button>
+              <button
+                onClick={() => onConfirm(false)}
+                disabled={isConfirming}
+                className="px-3 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+        <div className="text-xs opacity-70 mt-1">
+          {typeof message.timestamp === 'string'
+            ? new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            : message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          }
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default ChatMessage;
+```
+
+### frontend/src/services/ai.api.ts
+```typescript
+import { AIChatRequest, AIChatResponse } from '../types/ai.types';
+
+/**
+ * AI API Service
+ * Handles communication with the backend AI chat endpoint
+ */
+class AIApiService {
+  private baseUrl: string;
+
+  constructor() {
+    this.baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:5004/api/v1'; // Fixed port
+  }
+
+  /**
+   * Send a chat message to the AI backend
+   */
+  async sendMessage(request: AIChatRequest): Promise<AIChatResponse> {
+    try {
+      const response = await fetch(\`\${this.baseUrl}/ai/chat\`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include', // Include cookies for session-based auth
+        body: JSON.stringify(request)
+      });
+
+      if (!response.ok) {
+        // Handle specific HTTP errors
+        if (response.status === 401 || response.status === 403) {
+          // Authentication failed - session expired or invalid
+          return {
+            success: false,
+            error: {
+              code: 'AUTH_ERROR',
+              message: 'Authentication required. Please sign in again.'
+            }
+          };
+        }
+        throw new Error(\`HTTP error! status: \${response.status}\`);
+      }
+
+      const data: AIChatResponse = await response.json();
+      return data;
+    } catch (error) {
+      console.error('AI API Error:', error);
+      return {
+        success: false,
+        error: {
+          code: 'NETWORK_ERROR',
+          message: 'Failed to connect to AI service'
+        }
+      };
+    }
+  }
+
+  /**
+   * New method to match the expected 'chat' method
+   */
+  async chat(request: AIChatRequest): Promise<AIChatResponse> {
+    return this.sendMessage(request);
+  }
+}
+
+export const aiApiService = new AIApiService();
+```
+
+### frontend/src/types/ai.types.ts
+```typescript
+/**
+ * AI Types for Frontend
+ * Defines TypeScript interfaces for AI-related frontend components
+ */
+
+// Interface for AI chat request
+export interface AIChatRequest {
+  message: string;
+  sessionId?: string;
+}
+
+// Interface for AI chat response
+export interface AIChatResponse {
+  success: boolean;
+  data?: {
+    responseText: string;
+    requiresConfirmation: boolean;
+    actionPlan: TaskOperationPlan[];
+    detectedIntent: UserIntent;
+  };
+  error?: {
+    code: string;
+    message: string;
+  };
+}
+
+// Interface for a planned task operation
+export interface TaskOperationPlan {
+  operation: TaskOperation;
+  endpoint: string;
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+  payload?: any;
+}
+
+// Enum for task operation types
+export enum TaskOperation {
+  CREATE = 'CREATE',
+  UPDATE = 'UPDATE',
+  DELETE = 'DELETE',
+  SEARCH = 'SEARCH',
+  MARK_COMPLETE = 'MARK_COMPLETE',
+  MARK_INCOMPLETE = 'MARK_INCOMPLETE'
+}
+
+// Enum for different types of user intents
+export enum IntentType {
+  CREATE_TASK = 'CREATE_TASK',
+  UPDATE_TASK = 'UPDATE_TASK',
+  DELETE_TASK = 'DELETE_TASK',
+  SEARCH_TASKS = 'SEARCH_TASKS',
+  MARK_COMPLETE = 'MARK_COMPLETE',
+  MARK_INCOMPLETE = 'MARK_INCOMPLETE',
+  SET_PRIORITY = 'SET_PRIORITY',
+  SET_DUE_DATE = 'SET_DUE_DATE',
+  SET_REMINDER = 'SET_REMINDER',
+  CREATE_RECURRING_TASK = 'CREATE_RECURRING_TASK'
+}
+
+// Enum for priority levels
+export enum PriorityLevel {
+  HIGH = 'HIGH',
+  MEDIUM = 'MEDIUM',
+  LOW = 'LOW'
+}
+
+// Enum for recurrence patterns
+export enum RecurrencePattern {
+  DAILY = 'DAILY',
+  WEEKLY = 'WEEKLY',
+  MONTHLY = 'MONTHLY'
+}
+
+// Interface for extracted parameters from user input
+export interface ExtractedParameters {
+  taskTitle?: string;
+  taskDescription?: string;
+  taskId?: string;
+  priority?: PriorityLevel;
+  dueDate?: string; // ISO date string
+  category?: string;
+  tags?: string[];
+  recurrencePattern?: RecurrencePattern;
+  reminderOffset?: number; // minutes before due date
+}
+
+// Interface for detected user intent
+export interface UserIntent {
+  type: IntentType;
+  confidence: number; // 0-1 scale
+  parameters: ExtractedParameters;
+}
+
+// Interface for AI response structure
+export interface FrontendAIResponse {
+  id: string;
+  userInput: string;
+  responseText: string;
+  requiresConfirmation: boolean;
+  timestamp: Date;
+}
+
+// Interface for AI chat message
+export interface AIChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: string; // ISO string format
+  requiresConfirmation?: boolean;
+  actionPlan?: TaskOperationPlan[];
+}
+
+// Interface for conversation message
+export interface ConversationMessage {
+  id: string;
+  role: 'user' | 'ai';
+  content: string;
+  timestamp: Date;
+  requiresConfirmation?: boolean;
+  actionPlan?: TaskOperationPlan[];
+}
+
+// Interface for AI conversation context
+export interface AIConversationContext {
+  sessionId: string;
+  userId: string;
+  lastInteraction: Date;
+  contextData?: any;
+}
+```

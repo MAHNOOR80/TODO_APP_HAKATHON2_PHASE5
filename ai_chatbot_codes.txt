@@ -1,0 +1,2973 @@
+# AI Chatbot Codes - Backend & Frontend
+
+## Backend AI Components
+
+### backend/src/ai/agent.ts
+```typescript
+import OpenAI from 'openai';
+import { aiConfig, AIConfig } from '../config/ai.config';
+import {
+  AIChatResponse,
+  UserIntent,
+  TaskOperationPlan,
+  AIConversationSession,
+  TaskOperation
+} from '../types/ai.types';
+import { AISessionModel } from '../models/ai-session.model';
+import { IntentDetector } from './intent-detector';
+import { ParameterExtractor } from './parameter-extractor';
+import { ActionPlanner } from './action-planner';
+
+/**
+ * AI Agent Class
+ * Orchestrates the AI-powered todo assistant functionality
+ */
+export class AI_Agent {
+  private intentDetector: IntentDetector;
+  private parameterExtractor: ParameterExtractor;
+  private actionPlanner: ActionPlanner;
+
+  constructor(
+    private openaiClient: OpenAI,
+    private config: AIConfig
+  ) {
+    this.intentDetector = new IntentDetector();
+    this.parameterExtractor = new ParameterExtractor();
+    this.actionPlanner = new ActionPlanner();
+  }
+
+  /**
+   * Process a chat message from the user
+   */
+  async processChat(message: string, sessionId?: string, userId?: string): Promise<AIChatResponse> {
+    try {
+      // Create or retrieve conversation session
+      const session = await this.getSession(sessionId, userId);
+
+      // Detect user intent from the message
+      const detectedIntent = await this.intentDetector.detectIntent(message, session);
+
+      // Extract parameters from the message
+      const parameters = await this.parameterExtractor.extract(message, session, detectedIntent.type);
+
+      // Create a new intent object with extracted parameters
+      const intentWithParams: UserIntent = {
+        ...detectedIntent,
+        parameters
+      };
+
+      // Plan the appropriate action(s) based on intent
+      let actionPlan = this.actionPlanner.planActions(intentWithParams, session);
+
+      // Special handling for CREATE_TASK when no valid title is detected
+      if (intentWithParams.type === 'CREATE_TASK' &&
+          actionPlan.length > 0 &&
+          actionPlan[0].operation === TaskOperation.CREATE &&
+          (!intentWithParams.parameters.taskTitle || intentWithParams.parameters.taskTitle.trim() === '')) {
+        // Don't execute the create action, but still generate a response asking for clarification
+        actionPlan = []; // Clear the action plan to prevent task creation
+      }
+
+      // Validate the action plan
+      const isValidPlan = this.actionPlanner.validateActionPlan(actionPlan);
+      if (!isValidPlan) {
+        return {
+          success: false,
+          error: {
+            code: 'INVALID_ACTION_PLAN',
+            message: 'Could not generate a valid action plan for your request'
+          }
+        };
+      }
+
+      // Check if confirmation is required for destructive actions
+      const requiresConfirmation = this.requiresConfirmation(intentWithParams);
+
+      // For destructive operations that require confirmation, set the pending confirmation flag
+      if (requiresConfirmation) {
+        await AISessionModel.setPendingConfirmation(session.sessionId, true);
+      }
+
+      // Generate natural language response
+      const responseText = this.generateResponse(intentWithParams, actionPlan);
+
+      // Create response object
+      const response: AIChatResponse = {
+        success: true,
+        data: {
+          responseText,
+          requiresConfirmation,
+          actionPlan,
+          detectedIntent: intentWithParams
+        }
+      };
+
+      // Update the session with the latest information only if there are changes
+      // Check if the session context needs updating
+      let shouldUpdateSession = false;
+      const updatedSession = { ...session };
+
+      // Update last intent in session context if it changed
+      if (updatedSession.context.lastIntent !== detectedIntent.type) {
+        updatedSession.context.lastIntent = detectedIntent.type;
+        shouldUpdateSession = true;
+      }
+
+      // Update last active time if it's been more than 1 minute since last update
+      // This reduces unnecessary updates for rapid consecutive messages
+      const timeSinceLastUpdate = new Date().getTime() - updatedSession.lastActiveAt.getTime();
+      if (timeSinceLastUpdate > 60000) { // 1 minute threshold
+        updatedSession.lastActiveAt = new Date();
+        shouldUpdateSession = true;
+      }
+
+      // Only update the session if there are actual changes to persist
+      if (shouldUpdateSession) {
+        await AISessionModel.update(updatedSession);
+      }
+
+      return response;
+    } catch (error) {
+      console.error('AI Agent Error:', error);
+
+      return {
+        success: false,
+        error: {
+          code: 'AI_PROCESSING_ERROR',
+          message: 'Failed to process AI request'
+        }
+      };
+    }
+  }
+
+  /**
+   * Generate natural language response based on intent and action plan
+   */
+  private generateResponse(detectedIntent: UserIntent, actionPlan: TaskOperationPlan[]): string {
+    switch (detectedIntent.type) {
+      case 'GREETING':
+        const greetingResponses = [
+          "Hi there! 👋 How can I help you with your tasks today?",
+          "Hello! 😊 What would you like to do with your tasks?",
+          "Hey! 🌟 Ready to tackle some tasks? How can I assist?",
+          "Greetings! 📝 Need help organizing your tasks?"
+        ];
+        return greetingResponses[Math.floor(Math.random() * greetingResponses.length)];
+
+      case 'CREATE_TASK':
+        if (actionPlan.length > 0 && actionPlan[0].payload) {
+          const payload = actionPlan[0].payload as Record<string, unknown>;
+          const title = typeof payload.title === 'string' ? payload.title : '';
+
+          // Check if title is untitled or empty, and if so, ask for clarification
+          if (!title || title.trim() === '' || title === 'Untitled task') {
+            const possibleTitle = detectedIntent.parameters.taskTitle || this.extractTitleFromMessage(detectedIntent.parameters.taskDescription || '');
+            if (possibleTitle && possibleTitle !== 'Untitled task') {
+              return `I noticed you mentioned "**${this.capitalizeTitle(possibleTitle)}**" - should I add this as a new task for you?`;
+            }
+            return "I'm not quite sure what task you'd like to create. Could you tell me the specific task you want to add?";
+          }
+
+          const dueDate = payload.dueDate ? new Date(payload.dueDate as string | Date) : null;
+
+          const positiveResponses = [
+            `✅ Great! I've added "**${this.capitalizeTitle(title)}**" to your task list.`,
+            `✅ Got it! Your task "**${this.capitalizeTitle(title)}**" has been created.`,
+            `✅ Perfect! I've put "**${this.capitalizeTitle(title)}**" on your to-do list.`
+          ];
+          const response = positiveResponses[Math.floor(Math.random() * positiveResponses.length)];
+
+          return `${response}${dueDate ? ` It's due on ${dueDate.toLocaleDateString()}.` : ''}`;
+        }
+        return "I've created the task for you.";
+
+      case 'MARK_COMPLETE':
+        const completeResponses = [
+          "✅ Nice work! That task is now marked as complete.",
+          "✅ Well done! I've marked that task as finished.",
+          "✅ Great job! That task is officially completed."
+        ];
+        return completeResponses[Math.floor(Math.random() * completeResponses.length)];
+
+      case 'MARK_INCOMPLETE':
+        const incompleteResponses = [
+          "🔄 I've marked that task as incomplete, so you can pick it up later.",
+          "🔄 All set! That task is now back on your to-do list.",
+          "🔄 No problem! That task is marked as needing attention again."
+        ];
+        return incompleteResponses[Math.floor(Math.random() * incompleteResponses.length)];
+
+      case 'DELETE_TASK':
+        const deleteResponses = [
+          "🗑️ Done! That task has been removed from your list.",
+          "🗑️ Got it! I've deleted that task for you.",
+          "🗑️ Task removed successfully!"
+        ];
+        return deleteResponses[Math.floor(Math.random() * deleteResponses.length)];
+
+      case 'SET_PRIORITY':
+        if (actionPlan.length > 0 && actionPlan[0].payload) {
+          const payload = actionPlan[0].payload as Record<string, unknown>;
+          const priority = typeof payload.priority === 'string' ? payload.priority : '';
+
+          if (priority) {
+            const priorityResponses = [
+              `📌 I've set the priority to **${priority.toLowerCase()}** for that task.`,
+              `📌 Priority updated to **${priority.toLowerCase()}**.`
+            ];
+            return priorityResponses[Math.floor(Math.random() * priorityResponses.length)];
+          }
+        }
+        return "📌 Priority updated.";
+
+      case 'SET_DUE_DATE':
+        if (actionPlan.length > 0 && actionPlan[0].payload) {
+          const payload = actionPlan[0].payload as Record<string, unknown>;
+          const dueDate = payload.dueDate ? new Date(payload.dueDate as string | Date) : null;
+
+          if (dueDate) {
+            const dateResponses = [
+              `📅 Due date updated! That task is now due on ${dueDate.toLocaleDateString()}.`,
+              `📅 Got it! I've set the due date to ${dueDate.toLocaleDateString()}.`
+            ];
+            return dateResponses[Math.floor(Math.random() * dateResponses.length)];
+          }
+        }
+        return "📅 Due date updated.";
+
+      case 'UNKNOWN':
+        // For unknown intents, check if it might be a task creation request without clear patterns
+        if (detectedIntent.parameters.taskTitle && detectedIntent.parameters.taskTitle.trim() !== '') {
+          const title = this.capitalizeTitle(detectedIntent.parameters.taskTitle);
+          return `I picked up "**${title}**" from your message - would you like me to create this as a new task?`;
+        }
+
+        // Check if the message looks like it could be a task (contains action words or seems like a task description)
+        const message = detectedIntent.parameters.taskDescription || detectedIntent.parameters.taskTitle || '';
+        const potentialTaskPattern = /\b(buy|get|call|email|write|read|buy|shop|clean|cook|exercise|study|work|prepare|organize|finish|complete|attend|visit|order|pay|plan|think about|research|learn|practice)\b/i;
+
+        if (potentialTaskPattern.test(message)) {
+          return `I sense you might want to add a task like "**${this.capitalizeTitle(message)}**". Would you like me to create this task for you?`;
+        }
+
+        const unknownResponses = [
+          "I'm here to help you manage your tasks! You can ask me to add, update, or check your tasks.",
+          "I'm your task assistant! What would you like to do with your tasks?",
+          "How can I help you with your tasks today?",
+          "Feel free to ask me to add, modify, or check your tasks anytime!"
+        ];
+        return unknownResponses[Math.floor(Math.random() * unknownResponses.length)];
+
+      default:
+        return "I've processed your request.";
+    }
+  }
+
+  /**
+   * Extract title from a message if not already available
+   */
+  private extractTitleFromMessage(message: string): string {
+    if (!message || message.trim() === '') {
+      return '';
+    }
+
+    // Remove common prefixes that might indicate a task
+    const cleanedMessage = message.replace(/^(add|create|make|set up|schedule|remember|don't forget)\s+(a\s+|the\s+|an\s+)?/i, '');
+    return cleanedMessage.trim();
+  }
+
+  /**
+   * Capitalize the first letter of each word in a title
+   */
+  private capitalizeTitle(title: string): string {
+    if (!title) return title;
+    return title
+      .split(' ')
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+      .join(' ');
+  }
+
+  /**
+   * Check if confirmation is required for the detected intent
+   */
+  private requiresConfirmation(detectedIntent: UserIntent): boolean {
+    // Require confirmation for destructive actions
+    return [
+      'DELETE_TASK',
+      'MARK_COMPLETE',
+      'MARK_INCOMPLETE'
+    ].includes(detectedIntent.type);
+  }
+
+  /**
+   * Get or create a conversation session
+   */
+  private async getSession(sessionId?: string, userId?: string): Promise<AIConversationSession> {
+    // If we have a session ID, try to retrieve the existing session
+    if (sessionId) {
+      const existingSession = await AISessionModel.get(sessionId);
+      if (existingSession) {
+        return existingSession;
+      }
+    }
+
+    // Create a new session if no existing one found
+    return await AISessionModel.create(userId || 'anonymous', sessionId);
+  }
+}
+```
+
+### backend/src/ai/intent-detector.ts
+```typescript
+import {
+  UserIntent,
+  IntentType,
+  ExtractedParameters,
+  AIConversationSession,
+  PriorityLevel,
+  RecurrencePattern
+} from '../types/ai.types';
+
+/**
+ * Intent Detector Module
+ * Responsible for detecting user intent from natural language input
+ */
+export class IntentDetector {
+  // Cache regex patterns to avoid recreating them on each call
+  private readonly createPatterns: RegExp[] = [
+    /add a task to (.+?)(?:\s|$|,|\.|!|\?)/i,
+    /create (.+?)(?:\s|$|,|\.|!|\?)/i,
+    /new task (.+?)(?:\s|$|,|\.|!|\?)/i,
+    /make (.+?)(?:\s|$|,|\.|!|\?)/i,
+    /i need to (.+?)(?:\s|$|,|\.|!|\?)/i,
+    /i want to (.+?)(?:\s|$|,|\.|!|\?)/i,
+    /remember to (.+?)(?:\s|$|,|\.|!|\?)/i,
+    /don't forget to (.+?)(?:\s|$|,|\.|!|\?)/i,
+    /set up (.+?)(?:\s|$|,|\.|!|\?)/i,
+    /schedule (.+?)(?:\s|$|,|\.|!|\?)/i
+  ];
+
+  private readonly taskTitlePatterns: RegExp[] = [
+    /add a task to (.+?)(?:\s|$|,|\.)/i,
+    /create (.+?)(?:\s|$|,|\.)/i,
+    /new task (.+?)(?:\s|$|,|\.)/i,
+    /make (.+?)(?:\s|$|,|\.)/i,
+    /i need to (.+?)(?:\s|$|,|\.)/i,
+    /i want to (.+?)(?:\s|$|,|\.)/i,
+    /remember to (.+?)(?:\s|$|,|\.)/i
+  ];
+
+  private readonly createIntentPattern: RegExp = /(add|create|make|new|set up|establish)\s+(task|to-do|todo|item|reminder|note)/i;
+  private readonly updateIntentPattern: RegExp = /(update|change|modify|edit|alter|adjust)\s+(task|the|that)/i;
+  private readonly deleteIntentPattern: RegExp = /(delete|remove|cancel|drop|get rid of)\s+(task|the|that)/i;
+  private readonly markCompletePattern: RegExp = /(complete|done|finished|finish|mark as done|check off|tick off)/i;
+  private readonly markIncompletePattern: RegExp = /(incomplete|not done|not finished|restart|reopen|mark as incomplete)/i;
+  private readonly searchIntentPattern: RegExp = /(find|search|look for|show me|display|list|get|retrieve)\s+(task|tasks|todo|todos)/i;
+  private readonly priorityIntentPattern: RegExp = /(priority|important|urgency|set priority|change priority)/i;
+  private readonly dueDateIntentPattern: RegExp = /(due date|deadline|by when|before|schedule|set date|change date)/i;
+  private readonly reminderIntentPattern: RegExp = /(remind|reminder|notification|alert|notify me)/i;
+  private readonly recurringIntentPattern: RegExp = /(recurring|repeat|every|daily|weekly|monthly|schedule regularly)/i;
+
+  // Greeting patterns
+  private readonly greetingPatterns: RegExp[] = [
+    /\b(hi|hello|hey|greetings|good morning|good afternoon|good evening|good day|howdy|hi there|hello there)\b/i,
+    /\b(good to see you|nice to see you|glad to see you)\b/i
+  ];
+
+  // Base confidence levels cache
+  private readonly baseConfidence: Record<IntentType, number> = {
+    [IntentType.CREATE_TASK]: 0.8,
+    [IntentType.UPDATE_TASK]: 0.7,
+    [IntentType.DELETE_TASK]: 0.9, // Higher for destructive actions
+    [IntentType.SEARCH_TASKS]: 0.6,
+    [IntentType.MARK_COMPLETE]: 0.8,
+    [IntentType.MARK_INCOMPLETE]: 0.8,
+    [IntentType.SET_PRIORITY]: 0.7,
+    [IntentType.SET_DUE_DATE]: 0.7,
+    [IntentType.SET_REMINDER]: 0.7,
+    [IntentType.CREATE_RECURRING_TASK]: 0.7,
+    [IntentType.GREETING]: 0.9, // High confidence for clear greetings
+    [IntentType.UNKNOWN]: 0.3  // Low confidence for unknown
+  };
+  /**
+   * Detect user intent from natural language input
+   */
+  async detectIntent(message: string, session: AIConversationSession): Promise<UserIntent> {
+    const lowerMessage = message.toLowerCase().trim();
+
+    // Check for specific patterns to determine intent
+    const detectedType = this.classifyIntent(lowerMessage, session);
+
+    // Determine confidence based on pattern matching certainty
+    const confidence = this.calculateConfidence(detectedType, lowerMessage);
+
+    // Extract parameters from the message
+    const parameters = this.extractParameters(message, session, detectedType);
+
+    return {
+      type: detectedType,
+      confidence,
+      parameters
+    };
+  }
+
+  /**
+   * Check if message is a greeting
+   */
+  private matchesGreetingIntent(message: string): boolean {
+    return this.greetingPatterns.some(pattern => pattern.test(message));
+  }
+
+  /**
+   * Classify the intent based on message content and session context
+   */
+  private classifyIntent(message: string, session: AIConversationSession): IntentType {
+    // First, check if this is a greeting
+    if (this.matchesGreetingIntent(message)) {
+      return IntentType.GREETING;
+    }
+
+    // Check if this is a follow-up command that refers to a recent task
+    const followUpIntent = this.resolveFollowUpCommand(message, session);
+    if (followUpIntent) {
+      return followUpIntent;
+    }
+
+    // Check for create task intents
+    if (this.matchesCreateIntent(message)) {
+      return IntentType.CREATE_TASK;
+    }
+
+    // Check for update task intents
+    if (this.matchesUpdateIntent(message)) {
+      return IntentType.UPDATE_TASK;
+    }
+
+    // Check for delete task intents
+    if (this.matchesDeleteIntent(message)) {
+      return IntentType.DELETE_TASK;
+    }
+
+    // Check for mark complete intents
+    if (this.matchesMarkCompleteIntent(message)) {
+      return IntentType.MARK_COMPLETE;
+    }
+
+    // Check for mark incomplete intents
+    if (this.matchesMarkIncompleteIntent(message)) {
+      return IntentType.MARK_INCOMPLETE;
+    }
+
+    // Check for search intents
+    if (this.matchesSearchIntent(message)) {
+      return IntentType.SEARCH_TASKS;
+    }
+
+    // Check for set priority intents
+    if (this.matchesSetPriorityIntent(message)) {
+      return IntentType.SET_PRIORITY;
+    }
+
+    // Check for set due date intents
+    if (this.matchesSetDueDateIntent(message)) {
+      return IntentType.SET_DUE_DATE;
+    }
+
+    // Check for set reminder intents
+    if (this.matchesSetReminderIntent(message)) {
+      return IntentType.SET_REMINDER;
+    }
+
+    // Check for recurring task intents
+    if (this.matchesCreateRecurringTaskIntent(message)) {
+      return IntentType.CREATE_RECURRING_TASK;
+    }
+
+    // Default to unknown if no specific intent is detected
+    return IntentType.UNKNOWN;
+  }
+
+  /**
+   * Resolve follow-up commands that refer to recent tasks using context
+   */
+  private resolveFollowUpCommand(message: string, session: AIConversationSession): IntentType | null {
+    const lowerMessage = message.toLowerCase().trim();
+    const recentTasks = session.context.recentTasks;
+
+    // Check if message contains follow-up references without explicit task details
+    if (!this.containsExplicitTaskDetails(message) && recentTasks && recentTasks.length > 0) {
+      // Look for follow-up phrases like "mark it complete", "delete that", etc.
+      if (this.matchesMarkCompleteIntent(lowerMessage) || lowerMessage.includes('mark it') || lowerMessage.includes('mark that')) {
+        return IntentType.MARK_COMPLETE;
+      }
+
+      if (this.matchesMarkIncompleteIntent(lowerMessage) || lowerMessage.includes('mark it incomplete') || lowerMessage.includes('mark that incomplete')) {
+        return IntentType.MARK_INCOMPLETE;
+      }
+
+      if (this.matchesDeleteIntent(lowerMessage) || lowerMessage.includes('delete it') || lowerMessage.includes('delete that') ||
+          lowerMessage.includes('remove it') || lowerMessage.includes('remove that')) {
+        return IntentType.DELETE_TASK;
+      }
+
+      if (lowerMessage.includes('update it') || lowerMessage.includes('change it') || lowerMessage.includes('modify that')) {
+        return IntentType.UPDATE_TASK;
+      }
+
+      if (lowerMessage.includes('set priority') || lowerMessage.includes('change priority')) {
+        return IntentType.SET_PRIORITY;
+      }
+
+      if (lowerMessage.includes('set due date') || lowerMessage.includes('change due date')) {
+        return IntentType.SET_DUE_DATE;
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Check if message contains explicit task details (not just references)
+   */
+  private containsExplicitTaskDetails(message: string): boolean {
+    return this.createPatterns.some(pattern => pattern.test(message));
+  }
+
+  /**
+   * Calculate confidence level for the detected intent
+   */
+  private calculateConfidence(intentType: IntentType, message: string): number {
+    // Adjust confidence based on message characteristics
+    let confidence = this.baseConfidence[intentType] || 0.5; // Default to 0.5 if not found
+
+    // Increase confidence if we have multiple indicators
+    if (this.hasMultipleIndicators(message, intentType)) {
+      confidence += 0.1;
+    }
+
+    // Ensure confidence stays within bounds
+    return Math.min(Math.max(confidence, 0.1), 1.0);
+  }
+
+  /**
+   * Check if the message has multiple indicators for the intent
+   */
+  private hasMultipleIndicators(message: string, intentType: IntentType): boolean {
+    let count = 0;
+
+    switch (intentType) {
+      case IntentType.CREATE_TASK:
+        if (/(add|create|make|new)\s+(task|to-do|todo|item)/.test(message)) count++;
+        if (/(need|want|should)\s+(to|add|create)/.test(message)) count++;
+        break;
+
+      case IntentType.DELETE_TASK:
+        if (/(delete|remove|cancel|drop)\s+(task|the|that)/.test(message)) count++;
+        if (/(get\s+rid\s+of|eliminate|erase)/.test(message)) count++;
+        break;
+
+      case IntentType.MARK_COMPLETE:
+        if (/(complete|done|finished|finish|marked)\s+(task|it|that)/.test(message)) count++;
+        if (/(check|tick|mark)\s+(off|as\s+done)/.test(message)) count++;
+        break;
+    }
+
+    return count >= 2;
+  }
+
+  /**
+   * Extract parameters from the message
+   */
+  private extractParameters(message: string, session: AIConversationSession, intentType: IntentType): ExtractedParameters {
+    const params: ExtractedParameters = {};
+
+    // Extract task title/description
+    params.taskTitle = this.extractTaskTitle(message);
+    params.taskDescription = this.extractTaskDescription(message);
+
+    // Extract due date
+    params.dueDate = this.extractDueDate(message);
+
+    // Extract priority
+    params.priority = this.extractPriority(message);
+
+    // Extract category
+    params.category = this.extractCategory(message);
+
+    // Extract tags
+    params.tags = this.extractTags(message);
+
+    // Extract recurrence pattern
+    params.recurrencePattern = this.extractRecurrencePattern(message);
+
+    // Extract reminder offset
+    params.reminderOffset = this.extractReminderOffset(message);
+
+    // Handle contextual references (e.g., "it", "that task", "the meeting")
+    if (session.context.recentTasks && session.context.recentTasks.length > 0) {
+      const referenceMatch = this.resolveReference(message, session);
+      if (referenceMatch) {
+        params.taskId = referenceMatch;
+      }
+    }
+
+    return params;
+  }
+
+  /**
+   * Extract task title from message
+   */
+  private extractTaskTitle(message: string): string | undefined {
+    // Look for common task creation patterns
+    for (const pattern of this.taskTitlePatterns) {
+      const match = message.match(pattern);
+      if (match && match[1]) {
+        // Clean up the extracted title
+        let title = match[1].trim();
+        // Remove common trailing phrases
+        title = title.replace(/\s+(tomorrow|today|later|now|tonight)$/i, '').trim();
+        if (title) return title;
+      }
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Extract task description from message
+   */
+  private extractTaskDescription(message: string): string | undefined {
+    // For now, we'll use the full message as description if no specific title is found
+    // In practice, this would be more sophisticated
+    return message.length > 100 ? message : undefined;
+  }
+
+  /**
+   * Extract due date from message
+   */
+  private extractDueDate(message: string): string | undefined {
+    const lowerMessage = message.toLowerCase();
+
+    // Handle specific days
+    if (lowerMessage.includes('tomorrow')) {
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      return tomorrow.toISOString();
+    }
+
+    if (lowerMessage.includes('today') || lowerMessage.includes('tonight')) {
+      return new Date().toISOString();
+    }
+
+    if (lowerMessage.includes('next week')) {
+      const nextWeek = new Date();
+      nextWeek.setDate(nextWeek.getDate() + 7);
+      return nextWeek.toISOString();
+    }
+
+    if (lowerMessage.includes('next month')) {
+      const nextMonth = new Date();
+      nextMonth.setMonth(nextMonth.getMonth() + 1);
+      return nextMonth.toISOString();
+    }
+
+    // Handle specific date formats (simple parsing)
+    const dateMatch = message.match(/(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})|([0-9]{4}-[0-9]{2}-[0-9]{2})/);
+    if (dateMatch) {
+      const dateString = dateMatch[0];
+      const parsedDate = new Date(dateString);
+      if (!isNaN(parsedDate.getTime())) {
+        return parsedDate.toISOString();
+      }
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Extract priority from message
+   */
+  private extractPriority(message: string): PriorityLevel | undefined {
+    const lowerMessage = message.toLowerCase();
+
+    if (lowerMessage.includes('high priority') || lowerMessage.includes('urgent') || lowerMessage.includes('important')) {
+      return PriorityLevel.HIGH;
+    }
+
+    if (lowerMessage.includes('low priority') || lowerMessage.includes('not urgent')) {
+      return PriorityLevel.LOW;
+    }
+
+    if (lowerMessage.includes('medium priority')) {
+      return PriorityLevel.MEDIUM;
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Extract category from message
+   */
+  private extractCategory(message: string): string | undefined {
+    const categoryMatch = message.match(/(?:in|for|under)\s+(work|personal|shopping|home|health|finance|education|other)/i);
+    return categoryMatch ? categoryMatch[1] : undefined;
+  }
+
+  /**
+   * Extract tags from message
+   */
+  private extractTags(message: string): string[] {
+    // Extract hashtags as tags
+    const hashtagMatches = message.match(/#(\w+)/g);
+    if (hashtagMatches) {
+      return hashtagMatches.map(tag => tag.substring(1)); // Remove the '#' character
+    }
+
+    return [];
+  }
+
+  /**
+   * Extract recurrence pattern from message
+   */
+  private extractRecurrencePattern(message: string): RecurrencePattern | undefined {
+    const lowerMessage = message.toLowerCase();
+
+    if (lowerMessage.includes('every day') || lowerMessage.includes('daily')) {
+      return RecurrencePattern.DAILY;
+    }
+
+    if (lowerMessage.includes('every week') || lowerMessage.includes('weekly') || lowerMessage.includes('every monday')) {
+      return RecurrencePattern.WEEKLY;
+    }
+
+    if (lowerMessage.includes('every month') || lowerMessage.includes('monthly')) {
+      return RecurrencePattern.MONTHLY;
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Extract reminder offset from message
+   */
+  private extractReminderOffset(message: string): number | undefined {
+    const minuteMatch = message.match(/(\d+)\s+minute/i);
+    if (minuteMatch) {
+      return parseInt(minuteMatch[1], 10) * 60 * 1000; // Convert to milliseconds
+    }
+
+    const hourMatch = message.match(/(\d+)\s+hour/i);
+    if (hourMatch) {
+      return parseInt(hourMatch[1], 10) * 60 * 60 * 1000; // Convert to milliseconds
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Resolve contextual references like "it", "that", "the task"
+   */
+  private resolveReference(message: string, session: AIConversationSession): string | undefined {
+    const lowerMessage = message.toLowerCase();
+    const recentTasks = session.context.recentTasks;
+
+    if (!recentTasks || recentTasks.length === 0) {
+      return undefined;
+    }
+
+    // Check if message refers to recent tasks
+    if (lowerMessage.includes('it') || lowerMessage.includes('that') || lowerMessage.includes('the task')) {
+      // Return the most recent task ID
+      return recentTasks[recentTasks.length - 1];
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Check if message matches create intent patterns
+   */
+  private matchesCreateIntent(message: string): boolean {
+    return this.createIntentPattern.test(message);
+  }
+
+  /**
+   * Check if message matches update intent patterns
+   */
+  private matchesUpdateIntent(message: string): boolean {
+    return this.updateIntentPattern.test(message);
+  }
+
+  /**
+   * Check if message matches delete intent patterns
+   */
+  private matchesDeleteIntent(message: string): boolean {
+    return this.deleteIntentPattern.test(message);
+  }
+
+  /**
+   * Check if message matches mark complete intent patterns
+   */
+  private matchesMarkCompleteIntent(message: string): boolean {
+    return this.markCompletePattern.test(message);
+  }
+
+  /**
+   * Check if message matches mark incomplete intent patterns
+   */
+  private matchesMarkIncompleteIntent(message: string): boolean {
+    return this.markIncompletePattern.test(message);
+  }
+
+  /**
+   * Check if message matches search intent patterns
+   */
+  private matchesSearchIntent(message: string): boolean {
+    return this.searchIntentPattern.test(message);
+  }
+
+  /**
+   * Check if message matches set priority intent patterns
+   */
+  private matchesSetPriorityIntent(message: string): boolean {
+    return this.priorityIntentPattern.test(message);
+  }
+
+  /**
+   * Check if message matches set due date intent patterns
+   */
+  private matchesSetDueDateIntent(message: string): boolean {
+    return this.dueDateIntentPattern.test(message);
+  }
+
+  /**
+   * Check if message matches set reminder intent patterns
+   */
+  private matchesSetReminderIntent(message: string): boolean {
+    return this.reminderIntentPattern.test(message);
+  }
+
+  /**
+   * Check if message matches create recurring task intent patterns
+   */
+  private matchesCreateRecurringTaskIntent(message: string): boolean {
+    return this.recurringIntentPattern.test(message);
+  }
+}
+```
+
+### backend/src/ai/parameter-extractor.ts
+```typescript
+import {
+  ExtractedParameters,
+  AIConversationSession,
+  IntentType,
+  PriorityLevel,
+  RecurrencePattern
+} from '../types/ai.types';
+
+/**
+ * Parameter Extractor Module
+ * Responsible for extracting structured parameters from natural language input
+ */
+export class ParameterExtractor {
+  // Cache regex patterns to avoid recreating them on each call
+  private readonly taskTitlePatterns: RegExp[] = [
+    /add a task to (.+?)(?:\s|$|,|\.|!|\?)/i,
+    /create (.+?)(?:\s|$|,|\.|!|\?)/i,
+    /new task (.+?)(?:\s|$|,|\.|!|\?)/i,
+    /make (.+?)(?:\s|$|,|\.|!|\?)/i,
+    /i need to (.+?)(?:\s|$|,|\.|!|\?)/i,
+    /i want to (.+?)(?:\s|$|,|\.|!|\?)/i,
+    /remember to (.+?)(?:\s|$|,|\.|!|\?)/i,
+    /don't forget to (.+?)(?:\s|$|,|\.|!|\?)/i,
+    /set up (.+?)(?:\s|$|,|\.|!|\?)/i,
+    /schedule (.+?)(?:\s|$|,|\.|!|\?)/i
+  ];
+
+  private readonly cleanTitlePattern: RegExp = /\s+(tomorrow|today|tonight|later|now|this week|this month|please|thanks|pls)$/i;
+  private readonly dateRegex: RegExp = /(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})|([0-9]{4}-[0-9]{2}-[0-9]{2})/;
+  private readonly categoryPattern: RegExp = /(?:in|for|under|category:)\s*([a-zA-Z0-9\s]+)/i;
+  private readonly hashtagPattern: RegExp = /#(\w+)/g;
+  private readonly dailyPattern: RegExp = /(every day|daily|each day|day after day)/i;
+  private readonly weeklyPattern: RegExp = /(every week|weekly|each week|every monday|every tuesday|every wednesday|every thursday|every friday|every saturday|every sunday)/i;
+  private readonly monthlyPattern: RegExp = /(every month|monthly|each month|every year|yearly)/i;
+  private readonly timePatterns: RegExp[] = [
+    /(\d+)\s+minute(s)?\s+before/i,
+    /(\d+)\s+hour(s)?\s+before/i,
+    /(\d+)\s+day(s)?\s+before/i,
+    /remind me (\d+)\s+(minute|hour|day)s?\s+before/i
+  ];
+  private readonly specificReferencePattern: RegExp = /the\s+(\w+)/i;
+  /**
+   * Extract structured parameters from natural language input
+   */
+  async extract(message: string, session: AIConversationSession, intentType: IntentType): Promise<ExtractedParameters> {
+    const params: ExtractedParameters = {};
+
+    // Extract task-related parameters
+    params.taskTitle = this.extractTaskTitle(message);
+    params.taskDescription = this.extractTaskDescription(message);
+
+    // Extract date-related parameters
+    params.dueDate = this.extractDueDate(message);
+
+    // Extract priority parameters
+    params.priority = this.extractPriority(message);
+
+    // Extract category parameters
+    params.category = this.extractCategory(message);
+
+    // Extract tag parameters
+    params.tags = this.extractTags(message);
+
+    // Extract recurrence parameters
+    params.recurrencePattern = this.extractRecurrencePattern(message);
+
+    // Extract reminder parameters
+    params.reminderOffset = this.extractReminderOffset(message);
+
+    // Resolve contextual references (e.g., "it", "that task")
+    params.taskId = this.resolveTaskReference(message, session, intentType);
+
+    return params;
+  }
+
+  /**
+   * Extract task title from message
+   */
+  private extractTaskTitle(message: string): string | undefined {
+    // Look for common task creation patterns
+    for (const pattern of this.taskTitlePatterns) {
+      const match = message.match(pattern);
+      if (match && match[1]) {
+        // Clean up the extracted title
+        let title = match[1].trim();
+
+        // Remove common trailing phrases using cached regex
+        title = title.replace(this.cleanTitlePattern, '').trim();
+
+        if (title) return title;
+      }
+    }
+
+    // If no specific pattern matched, try to extract a potential task from the message
+    // This handles cases like "Buy groceries" where the user just says the task
+    const trimmedMessage = message.trim();
+    if (trimmedMessage && trimmedMessage.length <= 100) { // Reasonable length for a task
+      // Exclude messages that are clearly not tasks (greetings, yes/no, etc.)
+      const commonNonTaskMessages = /^(yes|no|ok|okay|sure|hi|hello|hey|thanks|thank you|please|sorry)$/i;
+
+      if (!commonNonTaskMessages.test(trimmedMessage)) {
+        // Remove common action words that might precede a task but aren't part of the task itself
+        const cleanedMessage = trimmedMessage.replace(/^(add|create|make|set up|schedule|remember|don't forget|remind me to|i need to|i want to|to)\s+/i, '');
+
+        if (cleanedMessage && cleanedMessage.length > 0 && cleanedMessage.length <= 100) {
+          return cleanedMessage;
+        }
+      }
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Extract task description from message
+   */
+  private extractTaskDescription(message: string): string | undefined {
+    // For now, we'll extract additional context that could be used as description
+    // This is a simple approach - in practice, you'd use more sophisticated NLP
+
+    // Look for additional context after the main task title
+    const title = this.extractTaskTitle(message);
+    if (title) {
+      // Find where the title appears in the message and extract everything after
+      const titleIndex = message.toLowerCase().indexOf(title.toLowerCase());
+      if (titleIndex !== -1) {
+        const afterTitle = message.substring(titleIndex + title.length).trim();
+        if (afterTitle && afterTitle.length > 0) {
+          return afterTitle;
+        }
+      }
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Extract due date from message
+   */
+  private extractDueDate(message: string): string | undefined {
+    const lowerMessage = message.toLowerCase().trim();
+
+    // Handle specific relative dates
+    if (lowerMessage.includes('tomorrow')) {
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      tomorrow.setHours(0, 0, 0, 0); // Set to beginning of day
+      return tomorrow.toISOString();
+    }
+
+    if (lowerMessage.includes('today') || lowerMessage.includes('tonight')) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0); // Set to beginning of day
+      return today.toISOString();
+    }
+
+    if (lowerMessage.includes('yesterday')) {
+      const yesterday = new Date();
+      yesterday.setDate(yesterday.getDate() - 1);
+      yesterday.setHours(0, 0, 0, 0);
+      return yesterday.toISOString();
+    }
+
+    if (lowerMessage.includes('next week')) {
+      const nextWeek = new Date();
+      nextWeek.setDate(nextWeek.getDate() + 7);
+      nextWeek.setHours(0, 0, 0, 0);
+      return nextWeek.toISOString();
+    }
+
+    if (lowerMessage.includes('next month')) {
+      const nextMonth = new Date();
+      nextMonth.setMonth(nextMonth.getMonth() + 1);
+      nextMonth.setHours(0, 0, 0, 0);
+      return nextMonth.toISOString();
+    }
+
+    if (lowerMessage.includes('next year')) {
+      const nextYear = new Date();
+      nextYear.setFullYear(nextYear.getFullYear() + 1);
+      nextYear.setHours(0, 0, 0, 0);
+      return nextYear.toISOString();
+    }
+
+    // Handle specific date formats (MM/DD/YYYY, DD/MM/YYYY, YYYY-MM-DD)
+    const dateMatch = message.match(this.dateRegex);
+    if (dateMatch) {
+      const dateString = dateMatch[0];
+      const parsedDate = new Date(dateString);
+      if (!isNaN(parsedDate.getTime())) {
+        parsedDate.setHours(0, 0, 0, 0); // Set to beginning of day
+        return parsedDate.toISOString();
+      }
+    }
+
+    // Handle day of week references
+    const daysOfWeek = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+    const dayMatch = daysOfWeek.find(day => lowerMessage.includes(day));
+
+    if (dayMatch) {
+      const targetDay = daysOfWeek.indexOf(dayMatch);
+      const today = new Date();
+      const currentDay = today.getDay(); // Sunday = 0, Monday = 1, etc.
+
+      let daysUntilTarget = targetDay - currentDay;
+      if (daysUntilTarget <= 0) {
+        daysUntilTarget += 7; // Next week
+      }
+
+      const nextDay = new Date(today);
+      nextDay.setDate(today.getDate() + daysUntilTarget);
+      nextDay.setHours(0, 0, 0, 0);
+
+      return nextDay.toISOString();
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Extract priority from message
+   */
+  private extractPriority(message: string): PriorityLevel | undefined {
+    const lowerMessage = message.toLowerCase();
+
+    // Check for high priority indicators
+    if (lowerMessage.includes('high priority') ||
+        lowerMessage.includes('urgent') ||
+        lowerMessage.includes('important') ||
+        lowerMessage.includes('asap') ||
+        lowerMessage.includes('as soon as possible') ||
+        lowerMessage.includes('critical')) {
+      return PriorityLevel.HIGH;
+    }
+
+    // Check for low priority indicators
+    if (lowerMessage.includes('low priority') ||
+        lowerMessage.includes('not urgent') ||
+        lowerMessage.includes('whenever') ||
+        lowerMessage.includes('when possible') ||
+        lowerMessage.includes('low importance')) {
+      return PriorityLevel.LOW;
+    }
+
+    // Check for medium priority indicators
+    if (lowerMessage.includes('medium priority') ||
+        lowerMessage.includes('normal priority') ||
+        lowerMessage.includes('regular priority')) {
+      return PriorityLevel.MEDIUM;
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Extract category from message
+   */
+  private extractCategory(message: string): string | undefined {
+    const lowerMessage = message.toLowerCase();
+
+    // Look for common categories
+    const categoryPatterns: { [key: string]: RegExp } = {
+      'Work': /\b(work|job|office|meeting|project|task|colleague|boss|client|work-related)\b/,
+      'Personal': /\b(personal|my|me|family|home|private|own)\b/,
+      'Shopping': /\b(shopping|buy|purchase|grocery|store|market)\b/,
+      'Health': /\b(health|doctor|appointment|medical|exercise|fitness|wellness)\b/,
+      'Finance': /\b(finance|money|bank|budget|expense|payment|bill)\b/,
+      'Education': /\b(education|study|learn|course|school|university|homework|assignment)\b/,
+      'Entertainment': /\b(entertainment|fun|movie|game|play|leisure|relax)\b/,
+      'Travel': /\b(travel|trip|vacation|journey|flight|hotel|destination)\b/
+    };
+
+    for (const [category, pattern] of Object.entries(categoryPatterns)) {
+      if (pattern.test(lowerMessage)) {
+        return category;
+      }
+    }
+
+    // Check for category specified in message
+    const categoryMatch = message.match(this.categoryPattern);
+    if (categoryMatch) {
+      return categoryMatch[1].trim();
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Extract tags from message
+   */
+  private extractTags(message: string): string[] {
+    // Extract hashtags as tags using cached pattern
+    const hashtagMatches = message.match(this.hashtagPattern);
+    if (hashtagMatches) {
+      return hashtagMatches.map(tag => tag.substring(1)).map(tag => tag.toLowerCase()); // Remove the '#' character and lowercase
+    }
+
+    return [];
+  }
+
+  /**
+   * Extract recurrence pattern from message
+   */
+  private extractRecurrencePattern(message: string): RecurrencePattern | undefined {
+    const lowerMessage = message.toLowerCase();
+
+    // Check for daily recurrence using cached pattern
+    if (this.dailyPattern.test(lowerMessage)) {
+      return RecurrencePattern.DAILY;
+    }
+
+    // Check for weekly recurrence using cached pattern
+    if (this.weeklyPattern.test(lowerMessage)) {
+      return RecurrencePattern.WEEKLY;
+    }
+
+    // Check for monthly recurrence using cached pattern
+    if (this.monthlyPattern.test(lowerMessage)) {
+      return RecurrencePattern.MONTHLY; // Treating yearly as monthly for simplicity
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Extract reminder offset from message
+   */
+  private extractReminderOffset(message: string): number | undefined {
+    // Extract time before due date to send reminder using cached patterns
+    for (const pattern of this.timePatterns) {
+      const match = message.match(pattern);
+      if (match && match[1]) {
+        const quantity = parseInt(match[1], 10);
+        const unit = match[2] || (match[3] ? match[3].toLowerCase() : 'minute');
+
+        if (unit.startsWith('minute')) {
+          return quantity * 60 * 1000; // Convert to milliseconds
+        } else if (unit.startsWith('hour')) {
+          return quantity * 60 * 60 * 1000; // Convert to milliseconds
+        } else if (unit.startsWith('day')) {
+          return quantity * 24 * 60 * 60 * 1000; // Convert to milliseconds
+        }
+      }
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Resolve task references like "it", "that", "the task"
+   */
+  private resolveTaskReference(message: string, session: AIConversationSession, intentType: IntentType): string | undefined {
+    const lowerMessage = message.toLowerCase();
+    const recentTasks = session.context.recentTasks;
+
+    // Don't resolve references for create operations
+    if (intentType === IntentType.CREATE_TASK) {
+      return undefined;
+    }
+
+    if (!recentTasks || recentTasks.length === 0) {
+      return undefined;
+    }
+
+    // Check if message refers to recent tasks using common reference words
+    const referenceWords = ['it', 'that', 'the task', 'this task', 'above task', 'previous task', 'the one', 'that one'];
+
+    // Look for more specific references like "the meeting", "the grocery task", etc.
+    const specificMatch = message.match(this.specificReferencePattern);
+
+    if (specificMatch && specificMatch[1]) {
+      const keyword = specificMatch[1].toLowerCase();
+      // Try to find a recent task that contains this keyword
+      for (const taskId of recentTasks) {
+        // In a real implementation, we would look up the task details to match the keyword
+        // For now, we'll just return the most recent task as a fallback
+        // This is a simplified approach - in production, you'd have access to task details
+      }
+    }
+
+    for (const refWord of referenceWords) {
+      if (lowerMessage.includes(refWord)) {
+        // Return the most recent task ID
+        return recentTasks[recentTasks.length - 1];
+      }
+    }
+
+    return undefined;
+  }
+}
+```
+
+### backend/src/ai/action-planner.ts
+```typescript
+import {
+  UserIntent,
+  IntentType,
+  TaskOperationPlan,
+  TaskOperation,
+  AIConversationSession
+} from '../types/ai.types';
+
+/**
+ * Action Planner Module
+ * Plans the appropriate API calls based on detected intent and extracted parameters
+ */
+export class ActionPlanner {
+  // Cache valid HTTP methods for validation
+  private readonly validMethods = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
+  /**
+   * Plan the appropriate action(s) based on detected intent and parameters
+   */
+  planActions(detectedIntent: UserIntent, _session: AIConversationSession): TaskOperationPlan[] {
+    const plans: TaskOperationPlan[] = [];
+
+    const actionPlan = this.handleIntent(detectedIntent);
+    plans.push(actionPlan);
+
+    return plans;
+  }
+
+  private handleIntent(detectedIntent: UserIntent): TaskOperationPlan {
+    switch (detectedIntent.type) {
+      case IntentType.CREATE_TASK:
+        return this.createTaskAction(detectedIntent);
+
+      case IntentType.UPDATE_TASK:
+        return this.updateTaskAction(detectedIntent);
+
+      case IntentType.DELETE_TASK:
+        return this.deleteTaskAction(detectedIntent);
+
+      case IntentType.SEARCH_TASKS:
+        return this.searchTasksAction(detectedIntent);
+
+      case IntentType.MARK_COMPLETE:
+        return this.markCompleteAction(detectedIntent);
+
+      case IntentType.MARK_INCOMPLETE:
+        return this.markIncompleteAction(detectedIntent);
+
+      case IntentType.SET_PRIORITY:
+        return this.setPriorityAction(detectedIntent);
+
+      case IntentType.SET_DUE_DATE:
+        return this.setDueDateAction(detectedIntent);
+
+      case IntentType.SET_REMINDER:
+        return this.setReminderAction(detectedIntent);
+
+      case IntentType.CREATE_RECURRING_TASK:
+        return this.createRecurringTaskAction(detectedIntent);
+
+      default:
+        // Default action - search for tasks
+        return this.searchTasksAction(detectedIntent);
+    }
+  }
+
+  /**
+   * Create action plan for creating a task
+   */
+  private createTaskAction(intent: UserIntent): TaskOperationPlan {
+    // Check if we have a valid task title, if not, we shouldn't create the task yet
+    const hasValidTitle = intent.parameters.taskTitle && intent.parameters.taskTitle.trim() !== '';
+
+    return {
+      operation: TaskOperation.CREATE,
+      endpoint: '/tasks',
+      method: 'POST',
+      payload: {
+        title: hasValidTitle ? intent.parameters.taskTitle : 'Untitled task',
+        description: intent.parameters.taskDescription,
+        completed: false,
+        priority: intent.parameters.priority?.toLowerCase() || 'medium',
+        tags: intent.parameters.tags || [],
+        category: intent.parameters.category,
+        dueDate: intent.parameters.dueDate,
+        recurrencePattern: intent.parameters.recurrencePattern?.toLowerCase(),
+        reminderEnabled: !!intent.parameters.reminderOffset,
+        reminderOffsetMinutes: intent.parameters.reminderOffset
+          ? Math.floor(intent.parameters.reminderOffset / (1000 * 60)) // Convert milliseconds to minutes
+          : undefined
+      }
+    };
+  }
+
+  /**
+   * Create action plan for updating a task
+   */
+  private updateTaskAction(intent: UserIntent): TaskOperationPlan {
+    if (!intent.parameters.taskId) {
+      throw new Error('Task ID is required for update operation');
+    }
+
+    const updatePayload: Record<string, unknown> = {};
+    if (intent.parameters.taskTitle) updatePayload.title = intent.parameters.taskTitle;
+    if (intent.parameters.taskDescription) updatePayload.description = intent.parameters.taskDescription;
+    if (intent.parameters.priority) updatePayload.priority = intent.parameters.priority.toLowerCase();
+    if (intent.parameters.tags) updatePayload.tags = intent.parameters.tags;
+    if (intent.parameters.category) updatePayload.category = intent.parameters.category;
+    if (intent.parameters.dueDate) updatePayload.dueDate = intent.parameters.dueDate;
+    if (intent.parameters.reminderOffset !== undefined) {
+      updatePayload.reminderEnabled = true;
+      updatePayload.reminderOffsetMinutes = Math.floor(intent.parameters.reminderOffset / (1000 * 60));
+    }
+
+    return {
+      operation: TaskOperation.UPDATE,
+      endpoint: `/tasks/${intent.parameters.taskId}`,
+      method: 'PUT',
+      payload: updatePayload
+    };
+  }
+
+  /**
+   * Create action plan for deleting a task
+   */
+  private deleteTaskAction(intent: UserIntent): TaskOperationPlan {
+    if (!intent.parameters.taskId) {
+      throw new Error('Task ID is required for delete operation');
+    }
+
+    return {
+      operation: TaskOperation.DELETE,
+      endpoint: `/tasks/${intent.parameters.taskId}`,
+      method: 'DELETE'
+    };
+  }
+
+  /**
+   * Create action plan for searching tasks
+   */
+  private searchTasksAction(intent: UserIntent): TaskOperationPlan {
+    const queryParams: Record<string, string> = {};
+
+    if (intent.parameters.taskTitle) {
+      queryParams.search = intent.parameters.taskTitle;
+    }
+
+    if (intent.parameters.priority) {
+      queryParams.priority = intent.parameters.priority.toLowerCase();
+    }
+
+    if (intent.parameters.category) {
+      queryParams.category = intent.parameters.category;
+    }
+
+    if (intent.parameters.tags && intent.parameters.tags.length > 0) {
+      queryParams.tag = intent.parameters.tags[0]; // Taking first tag for simplicity
+    }
+
+    if (intent.parameters.dueDate) {
+      queryParams.dueDate = intent.parameters.dueDate;
+    }
+
+    // Construct query string
+    const queryString = new URLSearchParams(queryParams).toString();
+    const endpoint = `/tasks${queryString ? '?' + queryString : ''}`;
+
+    return {
+      operation: TaskOperation.SEARCH,
+      endpoint,
+      method: 'GET'
+    };
+  }
+
+  /**
+   * Create action plan for marking a task as complete
+   */
+  private markCompleteAction(intent: UserIntent): TaskOperationPlan {
+    if (!intent.parameters.taskId) {
+      throw new Error('Task ID is required for mark complete operation');
+    }
+
+    return {
+      operation: TaskOperation.MARK_COMPLETE,
+      endpoint: `/tasks/${intent.parameters.taskId}/complete`,
+      method: 'PATCH'
+    };
+  }
+
+  /**
+   * Create action plan for marking a task as incomplete
+   */
+  private markIncompleteAction(intent: UserIntent): TaskOperationPlan {
+    if (!intent.parameters.taskId) {
+      throw new Error('Task ID is required for mark incomplete operation');
+    }
+
+    return {
+      operation: TaskOperation.MARK_INCOMPLETE,
+      endpoint: `/tasks/${intent.parameters.taskId}/incomplete`,
+      method: 'PATCH'
+    };
+  }
+
+  /**
+   * Create action plan for setting task priority
+   */
+  private setPriorityAction(intent: UserIntent): TaskOperationPlan {
+    if (!intent.parameters.taskId || !intent.parameters.priority) {
+      throw new Error('Task ID and priority are required for set priority operation');
+    }
+
+    return {
+      operation: TaskOperation.UPDATE,
+      endpoint: `/tasks/${intent.parameters.taskId}`,
+      method: 'PUT',
+      payload: {
+        priority: intent.parameters.priority.toLowerCase()
+      }
+    };
+  }
+
+  /**
+   * Create action plan for setting task due date
+   */
+  private setDueDateAction(intent: UserIntent): TaskOperationPlan {
+    if (!intent.parameters.taskId || !intent.parameters.dueDate) {
+      throw new Error('Task ID and due date are required for set due date operation');
+    }
+
+    return {
+      operation: TaskOperation.UPDATE,
+      endpoint: `/tasks/${intent.parameters.taskId}`,
+      method: 'PUT',
+      payload: {
+        dueDate: intent.parameters.dueDate
+      }
+    };
+  }
+
+  /**
+   * Create action plan for setting task reminder
+   */
+  private setReminderAction(intent: UserIntent): TaskOperationPlan {
+    if (!intent.parameters.taskId || intent.parameters.reminderOffset === undefined) {
+      throw new Error('Task ID and reminder offset are required for set reminder operation');
+    }
+
+    return {
+      operation: TaskOperation.UPDATE,
+      endpoint: `/tasks/${intent.parameters.taskId}`,
+      method: 'PUT',
+      payload: {
+        reminderEnabled: true,
+        reminderOffsetMinutes: Math.floor(intent.parameters.reminderOffset / (1000 * 60))
+      }
+    };
+  }
+
+  /**
+   * Create action plan for creating a recurring task
+   */
+  private createRecurringTaskAction(intent: UserIntent): TaskOperationPlan {
+    return {
+      operation: TaskOperation.CREATE,
+      endpoint: '/tasks',
+      method: 'POST',
+      payload: {
+        title: intent.parameters.taskTitle || 'Recurring task',
+        description: intent.parameters.taskDescription,
+        completed: false,
+        priority: intent.parameters.priority?.toLowerCase() || 'medium',
+        tags: intent.parameters.tags || [],
+        category: intent.parameters.category,
+        dueDate: intent.parameters.dueDate,
+        recurrencePattern: intent.parameters.recurrencePattern?.toLowerCase(),
+        reminderEnabled: !!intent.parameters.reminderOffset,
+        reminderOffsetMinutes: intent.parameters.reminderOffset
+          ? Math.floor(intent.parameters.reminderOffset / (1000 * 60))
+          : undefined
+      }
+    };
+  }
+
+  /**
+   * Validate the action plan before execution
+   */
+  validateActionPlan(plan: TaskOperationPlan[]): boolean {
+    // Basic validation - check that each plan has required fields
+    for (const action of plan) {
+      if (!action.operation || !action.endpoint || !action.method) {
+        return false;
+      }
+
+      // Check if method is valid using cached set for better performance
+      if (!this.validMethods.has(action.method)) {
+        return false;
+      }
+
+      // Validate endpoint format (starts with /)
+      if (!action.endpoint.startsWith('/')) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+}
+```
+
+### backend/src/types/ai.types.ts
+```typescript
+/**
+ * AI Types Module
+ * Defines TypeScript interfaces for AI-related data structures
+ */
+
+// Enum for different types of user intents
+export enum IntentType {
+  CREATE_TASK = 'CREATE_TASK',
+  UPDATE_TASK = 'UPDATE_TASK',
+  DELETE_TASK = 'DELETE_TASK',
+  SEARCH_TASKS = 'SEARCH_TASKS',
+  MARK_COMPLETE = 'MARK_COMPLETE',
+  MARK_INCOMPLETE = 'MARK_INCOMPLETE',
+  SET_PRIORITY = 'SET_PRIORITY',
+  SET_DUE_DATE = 'SET_DUE_DATE',
+  SET_REMINDER = 'SET_REMINDER',
+  CREATE_RECURRING_TASK = 'CREATE_RECURRING_TASK',
+  GREETING = 'GREETING',
+  UNKNOWN = 'UNKNOWN'
+}
+
+// Enum for priority levels
+export enum PriorityLevel {
+  HIGH = 'HIGH',
+  MEDIUM = 'MEDIUM',
+  LOW = 'LOW'
+}
+
+// Enum for recurrence patterns
+export enum RecurrencePattern {
+  DAILY = 'DAILY',
+  WEEKLY = 'WEEKLY',
+  MONTHLY = 'MONTHLY'
+}
+
+// Enum for task operation types
+export enum TaskOperation {
+  CREATE = 'CREATE',
+  UPDATE = 'UPDATE',
+  DELETE = 'DELETE',
+  SEARCH = 'SEARCH',
+  MARK_COMPLETE = 'MARK_COMPLETE',
+  MARK_INCOMPLETE = 'MARK_INCOMPLETE'
+}
+
+// Interface for extracted parameters from user input
+export interface ExtractedParameters {
+  taskTitle?: string;
+  taskDescription?: string;
+  taskId?: string;
+  priority?: PriorityLevel;
+  dueDate?: string; // ISO date string
+  category?: string;
+  tags?: string[];
+  recurrencePattern?: RecurrencePattern;
+  reminderOffset?: number; // minutes before due date
+}
+
+// Interface for detected user intent
+export interface UserIntent {
+  type: IntentType;
+  confidence: number; // 0-1 scale
+  parameters: ExtractedParameters;
+}
+
+// Interface for AI response structure
+export interface AIResponse {
+  id: string;
+  sessionId: string;
+  userInput: string;
+  detectedIntent: UserIntent;
+  actionPlan: TaskOperationPlan[];
+  responseText: string;
+  requiresConfirmation: boolean;
+  timestamp: Date;
+}
+
+// Interface for a planned task operation
+export interface TaskOperationPlan {
+  operation: TaskOperation;
+  endpoint: string;
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+  payload?: any;
+}
+
+// Interface for AI conversation session
+export interface AIConversationSession {
+  sessionId: string;
+  userId: string;
+  context: {
+    recentTasks?: string[]; // IDs of recently referenced tasks
+    lastIntent?: IntentType;
+    pendingConfirmation?: boolean;
+  };
+  createdAt: Date;
+  lastActiveAt: Date;
+  expiresAt: Date;
+}
+
+// Interface for AI chat request
+export interface AIChatRequest {
+  message: string;
+  sessionId?: string;
+}
+
+// Interface for AI chat response
+export interface AIChatResponse {
+  success: boolean;
+  data?: {
+    responseText: string;
+    requiresConfirmation: boolean;
+    actionPlan: TaskOperationPlan[];
+    detectedIntent: UserIntent;
+  };
+  error?: {
+    code: string;
+    message: string;
+  };
+}
+```
+
+### backend/src/models/ai-session.model.ts
+```typescript
+/**
+ * AI Session Model
+ * Represents an AI conversation session with context and memory
+ */
+
+import {
+  AIConversationSession,
+  IntentType
+} from '../types/ai.types';
+
+/**
+ * In-memory session store for demonstration purposes
+ * In a production environment, this would use Redis, database, or other persistent storage
+ */
+class InMemorySessionStore {
+  private sessions: Map<string, AIConversationSession> = new Map();
+  private readonly cleanupInterval: number = 300000; // 5 minutes
+  private cleanupTimer: NodeJS.Timeout | null = null;
+
+  constructor() {
+    this.startCleanupTimer();
+  }
+
+  async get(sessionId: string): Promise<AIConversationSession | null> {
+    const session = this.sessions.get(sessionId) || null;
+
+    // Check if session is expired and clean it up if needed
+    if (session && session.expiresAt && new Date() > new Date(session.expiresAt)) {
+      await this.delete(sessionId);
+      return null;
+    }
+
+    return session;
+  }
+
+  async set(session: AIConversationSession): Promise<void> {
+    this.sessions.set(session.sessionId, session);
+  }
+
+  async delete(sessionId: string): Promise<void> {
+    this.sessions.delete(sessionId);
+  }
+
+  async update(session: AIConversationSession): Promise<void> {
+    // Update last active timestamp
+    session.lastActiveAt = new Date();
+    this.sessions.set(session.sessionId, session);
+  }
+
+  /**
+   * Start periodic cleanup of expired sessions
+   */
+  private startCleanupTimer(): void {
+    this.cleanupTimer = setInterval(() => {
+      this.cleanupExpiredSessionsSync();
+    }, this.cleanupInterval);
+  }
+
+  /**
+   * Cleanup expired sessions synchronously
+   */
+  cleanupExpiredSessionsSync(): void {
+    const now = new Date();
+    for (const [sessionId, session] of this.sessions.entries()) {
+      if (session.expiresAt && now > new Date(session.expiresAt)) {
+        this.sessions.delete(sessionId);
+      }
+    }
+  }
+
+  /**
+   * Stop the cleanup timer
+   */
+  stopCleanupTimer(): void {
+    if (this.cleanupTimer) {
+      clearInterval(this.cleanupTimer);
+      this.cleanupTimer = null;
+    }
+  }
+}
+
+// Initialize the session store
+export const aiSessionStore = new InMemorySessionStore();
+
+/**
+ * AI Session Model
+ * Manages conversation session lifecycle and context
+ */
+export class AISessionModel {
+  /**
+   * Create a new AI conversation session
+   */
+  static async create(userId: string, sessionId?: string): Promise<AIConversationSession> {
+    const actualSessionId = sessionId || `sess_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+    const session: AIConversationSession = {
+      sessionId: actualSessionId,
+      userId,
+      context: {
+        recentTasks: [],
+        lastIntent: undefined,
+        pendingConfirmation: false
+      },
+      createdAt: new Date(),
+      lastActiveAt: new Date(),
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) // 24 hours
+    };
+
+    await aiSessionStore.set(session);
+    return session;
+  }
+
+  /**
+   * Get an existing AI conversation session
+   */
+  static async get(sessionId: string): Promise<AIConversationSession | null> {
+    return await aiSessionStore.get(sessionId);
+  }
+
+  /**
+   * Update an existing AI conversation session
+   */
+  static async update(session: AIConversationSession): Promise<AIConversationSession> {
+    session.lastActiveAt = new Date();
+    await aiSessionStore.update(session);
+    return session;
+  }
+
+  /**
+   * Delete an AI conversation session
+   */
+  static async delete(sessionId: string): Promise<void> {
+    await aiSessionStore.delete(sessionId);
+  }
+
+  /**
+   * Add a task ID to the recent tasks context
+   */
+  static async addRecentTask(sessionId: string, taskId: string): Promise<void> {
+    const session = await this.get(sessionId);
+    if (!session) {
+      throw new Error(`Session ${sessionId} not found`);
+    }
+
+    // Add task to recent tasks, keeping only the last 5
+    session.context.recentTasks = [taskId, ...(session.context.recentTasks || [])].slice(0, 5);
+    await this.update(session);
+  }
+
+  /**
+   * Update the last intent for the session
+   */
+  static async updateLastIntent(sessionId: string, intentType: string): Promise<void> {
+    const session = await this.get(sessionId);
+    if (!session) {
+      throw new Error(`Session ${sessionId} not found`);
+    }
+
+    session.context.lastIntent = intentType as IntentType;
+    await this.update(session);
+  }
+
+  /**
+   * Set pending confirmation status
+   */
+  static async setPendingConfirmation(sessionId: string, pending: boolean): Promise<void> {
+    const session = await this.get(sessionId);
+    if (!session) {
+      throw new Error(`Session ${sessionId} not found`);
+    }
+
+    session.context.pendingConfirmation = pending;
+    await this.update(session);
+  }
+
+  /**
+   * Clean up expired sessions
+   */
+  static async cleanupExpiredSessions(): Promise<void> {
+    aiSessionStore.cleanupExpiredSessionsSync();
+  }
+
+  /**
+   * Shutdown the session store gracefully
+   */
+  static async shutdown(): Promise<void> {
+    aiSessionStore.stopCleanupTimer();
+  }
+}
+```
+
+### backend/src/config/ai.config.ts
+```typescript
+import OpenAI from 'openai';
+
+/**
+ * AI Configuration Module
+ * Handles configuration for AI services used in the todo assistant
+ */
+
+// Configuration interface for AI settings
+export interface AIConfig {
+  apiKey: string;
+  modelName: string;
+  temperature: number;
+  maxTokens: number;
+  timeout: number;
+}
+
+// Default configuration values
+const DEFAULT_AI_CONFIG: AIConfig = {
+  apiKey: process.env.OPENAI_API_KEY || '',
+  modelName: process.env.AI_MODEL_NAME || 'gpt-4o',
+  temperature: parseFloat(process.env.AI_TEMPERATURE || '0.7'),
+  maxTokens: parseInt(process.env.AI_MAX_TOKENS || '1000', 10),
+  timeout: parseInt(process.env.AI_TIMEOUT || '30000', 10), // 30 seconds
+};
+
+// Validate configuration
+function validateAIConfig(config: AIConfig): void {
+  if (!config.apiKey) {
+    throw new Error('AI API key is required. Please set OPENAI_API_KEY environment variable.');
+  }
+
+  if (!['gpt-4o', 'gpt-4-turbo', 'gpt-3.5-turbo', 'claude-3-opus', 'claude-3-sonnet'].includes(config.modelName)) {
+    console.warn(`Warning: Unrecognized model name "${config.modelName}". Using default model.`);
+  }
+
+  if (config.temperature < 0 || config.temperature > 1) {
+    throw new Error('AI temperature must be between 0 and 1.');
+  }
+
+  if (config.maxTokens <= 0) {
+    throw new Error('AI maxTokens must be greater than 0.');
+  }
+}
+
+// Get validated configuration
+export function getAIConfig(): AIConfig {
+  const config = { ...DEFAULT_AI_CONFIG };
+  validateAIConfig(config);
+  return config;
+}
+
+// Initialize OpenAI API client
+export function initializeOpenAIClient(): OpenAI {
+  const config = getAIConfig();
+  return new OpenAI({
+    apiKey: config.apiKey,
+  });
+}
+
+// Export the configuration
+export const aiConfig = getAIConfig();
+
+export default aiConfig;
+```
+
+### backend/src/routes/ai.routes.ts
+```typescript
+import express, { Request, Response, Router } from 'express';
+import { aiConfig, initializeOpenAIClient } from '../config/ai.config';
+import { AIChatRequest, AIChatResponse } from '../types/ai.types';
+import { AI_Agent } from '../ai/agent';
+import { requireAuth } from '../middleware/auth.middleware';
+import { aiRateLimiter, validateAIChatInput, sanitizeAIResponse } from '../middleware/ai-security.middleware';
+
+// Initialize the AI agent
+const aiAgent = new AI_Agent(initializeOpenAIClient(), aiConfig);
+
+const router: Router = express.Router();
+
+/**
+ * POST /api/v1/ai/chat
+ * Process natural language input for todo management
+ */
+router.post('/chat', requireAuth, aiRateLimiter, validateAIChatInput, async (req: Request, res: Response) => {
+  try {
+    const { message, sessionId }: AIChatRequest = req.body;
+
+    // Process the AI chat request
+    const result: AIChatResponse = await aiAgent.processChat(message, sessionId, req.userId);
+
+    // Sanitize the response before sending
+    const sanitizedResult = sanitizeAIResponse(result);
+    res.status(200).json(sanitizedResult);
+  } catch (error) {
+    console.error('AI Chat Error:', error);
+
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'An error occurred processing your request'
+      }
+    });
+  }
+});
+
+/**
+ * POST /api/v1/ai/confirm
+ * Handle user confirmation for pending actions
+ */
+router.post('/confirm', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const { sessionId, actionId } = req.body;
+
+    // Validate required fields
+    if (!sessionId || typeof sessionId !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'INVALID_SESSION_ID',
+          message: 'Valid session ID is required'
+        }
+      });
+      return; // Explicit return to satisfy TypeScript
+    }
+
+    if (!actionId || typeof actionId !== 'string') {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: 'INVALID_ACTION_ID',
+          message: 'Valid action ID is required'
+        }
+      });
+      return; // Explicit return to satisfy TypeScript
+    }
+
+    // In a real implementation, this would process the confirmed action
+    // For now, we'll just clear the pending confirmation
+    const { AISessionModel } = await import('../models/ai-session.model');
+    await AISessionModel.setPendingConfirmation(sessionId, false);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        message: 'Action confirmed successfully',
+        actionId
+      }
+    });
+  } catch (error) {
+    console.error('AI Confirmation Error:', error);
+
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'An error occurred processing your confirmation'
+      }
+    });
+  }
+});
+
+export default router;
+```
+
+### backend/src/middleware/ai-security.middleware.ts
+```typescript
+import { Request, Response, NextFunction } from 'express';
+import rateLimit from 'express-rate-limit';
+
+// Rate limiter for AI endpoints - limit to 100 requests per 15 minutes per IP
+export const aiRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit each IP to 100 requests per windowMs
+  message: {
+    error: {
+      code: 'RATE_LIMIT_EXCEEDED',
+      message: 'Too many requests from this IP, please try again later.'
+    }
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Rate limiter for sensitive operations like task deletion - limit to 10 requests per 15 minutes per IP
+export const aiSensitiveRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10, // Limit each IP to 10 sensitive requests per windowMs
+  message: {
+    error: {
+      code: 'RATE_LIMIT_EXCEEDED',
+      message: 'Too many sensitive requests from this IP, please try again later.'
+    }
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Input validation middleware for AI chat requests
+export const validateAIChatInput = (req: Request, res: Response, next: NextFunction) => {
+  const { message, sessionId } = req.body;
+
+  // Validate message exists and is not empty
+  if (!message || typeof message !== 'string') {
+    res.status(400).json({
+      success: false,
+      error: {
+        code: 'INVALID_INPUT',
+        message: 'Message is required and must be a string'
+      }
+    });
+    return; // Explicit return to satisfy TypeScript
+  }
+
+  // Sanitize the message input - remove potentially harmful content
+  const sanitizedMessage = message.trim().substring(0, 1000); // Limit length to 1000 characters
+  req.body.message = sanitizedMessage;
+
+  // Validate session ID format if provided (should be alphanumeric with optional hyphens/underscores)
+  if (sessionId && (typeof sessionId !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(sessionId))) {
+    res.status(400).json({
+      success: false,
+      error: {
+        code: 'INVALID_SESSION_ID',
+        message: 'Session ID must be a valid alphanumeric string with optional hyphens or underscores'
+      }
+    });
+    return; // Explicit return to satisfy TypeScript
+  }
+
+  next();
+};
+
+// Validate confirmation actions
+export const validateConfirmationInput = (req: Request, res: Response, next: NextFunction) => {
+  const { sessionId, actionId } = req.body;
+
+  if (!sessionId || typeof sessionId !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
+    res.status(400).json({
+      success: false,
+      error: {
+        code: 'INVALID_SESSION_ID',
+        message: 'Valid session ID is required'
+      }
+    });
+    return; // Explicit return to satisfy TypeScript
+  }
+
+  if (!actionId || typeof actionId !== 'string') {
+    res.status(400).json({
+      success: false,
+      error: {
+        code: 'INVALID_ACTION_ID',
+        message: 'Valid action ID is required'
+      }
+    });
+    return; // Explicit return to satisfy TypeScript
+  }
+
+  next();
+};
+
+// Sanitize AI response to prevent potential injection issues
+export const sanitizeAIResponse = (response: any): any => {
+  if (typeof response !== 'object' || response === null) {
+    return response;
+  }
+
+  // Create a sanitized copy of the response
+  const sanitized = JSON.parse(JSON.stringify(response));
+
+  // Sanitize response text if it exists
+  if (sanitized.data && sanitized.data.responseText) {
+    // Remove potentially harmful content from response text
+    sanitized.data.responseText = sanitized.data.responseText
+      .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '') // Remove script tags
+      .replace(/javascript:/gi, '') // Remove javascript: protocol
+      .replace(/vbscript:/gi, '') // Remove vbscript: protocol
+      .substring(0, 5000); // Limit response length
+  }
+
+  return sanitized;
+};
+```
+
+## Frontend AI Components
+
+### frontend/src/containers/AIChatContainer.tsx
+```typescript
+import React, { useState, useRef, useEffect } from 'react';
+import { useAIChat } from '../hooks/useAIChat';
+import ChatMessage from '../components/ChatMessage';
+
+interface AIChatContainerProps {
+  onTasksUpdated?: () => void;
+}
+
+const AIChatContainer: React.FC<AIChatContainerProps> = ({ onTasksUpdated }) => {
+  const {
+    messages,
+    sendMessage,
+    isLoading,
+    requiresConfirmation,
+    handleConfirmation,
+    sessionId
+  } = useAIChat(onTasksUpdated);
+  const [inputValue, setInputValue] = useState('');
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Scroll to bottom of messages when new messages are added
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!inputValue.trim() || isLoading || requiresConfirmation) return;
+
+    // Send message to AI backend
+    await sendMessage(inputValue);
+
+    setInputValue('');
+  };
+
+  return (
+    <div className="flex flex-col h-full border border-dark-700 rounded-xl shadow-lg bg-dark-800/70 backdrop-blur-xl">
+      {/* Chat Header */}
+      <div className="bg-dark-700/50 px-4 py-3 border-b border-dark-600 rounded-t-xl">
+        <h3 className="font-semibold text-dark-100">AI Todo Assistant</h3>
+        <p className="text-xs text-dark-400">Ask me to manage your tasks using natural language</p>
+      </div>
+
+      {/* Messages Container */}
+      <div className="flex-1 overflow-y-auto p-4 bg-dark-900/30" style={{ maxHeight: '400px' }}>
+        {messages.length === 0 ? (
+          <div className="text-center text-dark-400 italic mt-8">
+            Start a conversation with the AI assistant to manage your tasks...
+          </div>
+        ) : (
+          messages.map((message) => (
+            <ChatMessage
+              key={message.id}
+              message={message}
+              onConfirm={message.requiresConfirmation ? (confirmed) => handleConfirmation(confirmed) : undefined}
+              isConfirming={isLoading}
+            />
+          ))
+        )}
+        {isLoading && (
+          <div className="flex justify-start mb-4">
+            <div className="bg-dark-700 text-dark-200 rounded-lg rounded-bl-none px-4 py-2">
+              <div className="flex space-x-2">
+                <div className="w-2 h-2 bg-dark-400 rounded-full animate-bounce"></div>
+                <div className="w-2 h-2 bg-dark-400 rounded-full animate-bounce delay-100"></div>
+                <div className="w-2 h-2 bg-dark-400 rounded-full animate-bounce delay-200"></div>
+              </div>
+            </div>
+          </div>
+        )}
+        <div ref={messagesEndRef} />
+      </div>
+
+      {/* Confirmation Modal - shown when confirmation is required */}
+      {requiresConfirmation && (
+        <div className="absolute inset-0 bg-black bg-opacity-70 backdrop-blur-sm flex items-center justify-center z-10">
+          <div className="bg-dark-800 p-6 rounded-xl shadow-2xl max-w-md w-full mx-4 border border-dark-600">
+            <h4 className="text-lg font-semibold text-dark-100 mb-2">Confirm Action</h4>
+            <p className="text-dark-300 mb-4">Are you sure you want to proceed with this action?</p>
+            <div className="flex justify-end space-x-3">
+              <button
+                type="button"
+                className="px-4 py-2 text-sm font-medium text-dark-300 bg-dark-700 border border-dark-600 rounded-lg hover:bg-dark-600 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                onClick={() => handleConfirmation(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="px-4 py-2 text-sm font-medium text-white bg-red-600 border border-red-500 rounded-lg hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500"
+                onClick={() => handleConfirmation(true)}
+              >
+                Confirm
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Input Area */}
+      <div className="border-t border-dark-600 p-4 bg-dark-700/30 rounded-b-xl">
+        <form onSubmit={handleSubmit} className="flex gap-2">
+          <input
+            type="text"
+            value={inputValue}
+            onChange={(e) => setInputValue(e.target.value)}
+            placeholder="Ask me to manage your tasks (e.g., 'Add a task to buy groceries')"
+            className="flex-1 border border-dark-600 rounded-lg px-4 py-2 bg-dark-700 text-dark-50 placeholder:text-dark-400 focus:outline-none focus:ring-2 focus:ring-primary-500"
+            disabled={isLoading || requiresConfirmation}
+          />
+          <button
+            type="submit"
+            disabled={!inputValue.trim() || isLoading || requiresConfirmation}
+            className={`px-4 py-2 rounded-lg ${
+              inputValue.trim() && !isLoading && !requiresConfirmation
+                ? 'bg-primary-600 text-white hover:bg-primary-500'
+                : 'bg-dark-600 text-dark-400 cursor-not-allowed'
+            }`}
+          >
+            Send
+          </button>
+        </form>
+        <p className="text-xs text-dark-400 mt-2">
+          Examples: "Add a task to buy groceries", "Mark my meeting as complete", "Show high-priority tasks"
+        </p>
+      </div>
+    </div>
+  );
+};
+
+export default AIChatContainer;
+```
+
+### frontend/src/hooks/useAIChat.ts
+```typescript
+import { useState, useEffect, useCallback } from 'react';
+import {
+  AIChatMessage,
+  AIChatRequest,
+  AIChatResponse,
+  AIConversationContext
+} from '../types/ai.types';
+import { aiApiService as aiApi } from '../services/ai.api';
+import { createTask, updateTask, deleteTask } from '../services/tasks.api';
+
+interface UseAIChatReturn {
+  messages: AIChatMessage[];
+  sendMessage: (message: string) => Promise<void>;
+  isLoading: boolean;
+  requiresConfirmation: boolean;
+  handleConfirmation: (confirmed: boolean) => Promise<void>;
+  sessionId: string | null;
+}
+
+export const useAIChat = (onTasksUpdated?: () => void): UseAIChatReturn => {
+  const [messages, setMessages] = useState<AIChatMessage[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [requiresConfirmation, setRequiresConfirmation] = useState(false);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [pendingAction, setPendingAction] = useState<any>(null);
+
+  // Function to execute action plans generated by the AI
+  const executeActionPlans = useCallback(async (actionPlans: any[]) => {
+    for (const plan of actionPlans) {
+      try {
+        if (plan.operation && plan.endpoint && plan.method) {
+          // Make the API call based on the action plan
+          const apiUrl = `${import.meta.env.VITE_API_URL || 'http://localhost:5004/api/v1'}${plan.endpoint}`;
+
+          const response = await fetch(apiUrl, {
+            method: plan.method,
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: plan.payload ? JSON.stringify(plan.payload) : undefined,
+            credentials: 'include' // Ensure session cookies are included
+          });
+
+          if (!response.ok) {
+            console.error(`Failed to execute action plan: ${plan.operation}`, await response.text());
+          } else {
+            console.log(`Successfully executed action plan: ${plan.operation}`);
+          }
+        }
+      } catch (error) {
+        console.error('Error executing action plan:', error);
+      }
+    }
+  }, []);
+
+  // Initialize a new session when the hook is first used
+  useEffect(() => {
+    const initSession = async () => {
+      // In a real implementation, we would initialize a session with the backend
+      // For now, we'll just use a temporary ID
+      setSessionId(`sess_${Date.now()}`);
+    };
+
+    initSession();
+  }, []);
+
+  const handleConfirmation = useCallback(async (confirmed: boolean) => {
+    if (!confirmed || !pendingAction) {
+      setRequiresConfirmation(false);
+      setPendingAction(null);
+      return;
+    }
+
+    try {
+      setIsLoading(true);
+
+      // Send the confirmation to the backend
+      const response = await aiApi.confirmAction(sessionId || '', pendingAction?.actionId || '');
+
+      if (response.success && response.data) {
+        // Add the confirmation response to the chat
+        const confirmationMessage: AIChatMessage = {
+          id: `msg_${Date.now()}_conf`,
+          role: 'assistant',
+          content: response.data.responseText || 'Action completed successfully.',
+          timestamp: new Date().toISOString(),
+          requiresConfirmation: false
+        };
+
+        setMessages(prev => [...prev, confirmationMessage]);
+
+        // Execute the pending action if confirmed
+        if (confirmed && pendingAction) {
+          await executeActionPlans([pendingAction]);
+
+          // Notify parent component that tasks may have been updated
+          if (onTasksUpdated) {
+            onTasksUpdated();
+          }
+        }
+      } else {
+        // Handle authentication errors specifically
+        if (response.error?.code === 'AUTH_ERROR') {
+          // In a real implementation, we might want to redirect to login
+          // For now, just show an error message
+          const errorMessage: AIChatMessage = {
+            id: `msg_${Date.now()}_error`,
+            role: 'assistant',
+            content: response.error.message,
+            timestamp: new Date().toISOString(),
+            requiresConfirmation: false
+          };
+
+          setMessages(prev => [...prev, errorMessage]);
+        } else {
+          const errorMessage: AIChatMessage = {
+            id: `msg_${Date.now()}_error`,
+            role: 'assistant',
+            content: response.error?.message || 'Sorry, there was an error processing your confirmation.',
+            timestamp: new Date().toISOString(),
+            requiresConfirmation: false
+          };
+
+          setMessages(prev => [...prev, errorMessage]);
+        }
+      }
+    } catch (error) {
+      console.error('Confirmation error:', error);
+
+      const errorMessage: AIChatMessage = {
+        id: `msg_${Date.now()}_error`,
+        role: 'assistant',
+        content: 'Sorry, there was an error processing your confirmation.',
+        timestamp: new Date().toISOString(),
+        requiresConfirmation: false
+      };
+
+      setMessages(prev => [...prev, errorMessage]);
+    } finally {
+      setRequiresConfirmation(false);
+      setPendingAction(null);
+      setIsLoading(false);
+    }
+  }, [pendingAction]);
+
+  const sendMessage = useCallback(async (message: string) => {
+    if (!message.trim() || isLoading) return;
+
+    // Add user message to the chat
+    const userMessage: AIChatMessage = {
+      id: `msg_${Date.now()}_usr`,
+      role: 'user',
+      content: message,
+      timestamp: new Date().toISOString(),
+      requiresConfirmation: false
+    };
+
+    setMessages(prev => [...prev, userMessage]);
+    setIsLoading(true);
+
+    try {
+      const request: AIChatRequest = {
+        message,
+        sessionId: sessionId || undefined
+      };
+
+      const response: AIChatResponse = await aiApi.sendMessage(request);
+
+      if (response.success && response.data) {
+        // Check if confirmation is required
+        if (response.data.requiresConfirmation) {
+          setRequiresConfirmation(true);
+          setPendingAction(response.data.actionPlan);
+
+          // Add AI response that asks for confirmation
+          const aiMessage: AIChatMessage = {
+            id: `msg_${Date.now()}_ai_conf`,
+            role: 'assistant',
+            content: response.data.responseText,
+            timestamp: new Date().toISOString(),
+            requiresConfirmation: true,
+            actionPlan: response.data.actionPlan
+          };
+
+          setMessages(prev => [...prev, aiMessage]);
+        } else {
+          // Add normal AI response
+          const aiMessage: AIChatMessage = {
+            id: `msg_${Date.now()}_ai`,
+            role: 'assistant',
+            content: response.data.responseText,
+            timestamp: new Date().toISOString(),
+            requiresConfirmation: false
+          };
+
+          setMessages(prev => [...prev, aiMessage]);
+
+          // Execute the action plan if one was provided
+          if (response.data.actionPlan && Array.isArray(response.data.actionPlan)) {
+            await executeActionPlans(response.data.actionPlan);
+
+            // Notify parent component that tasks may have been updated
+            if (onTasksUpdated) {
+              onTasksUpdated();
+            }
+          }
+        }
+      } else {
+        // Handle authentication errors specifically
+        if (response.error?.code === 'AUTH_ERROR') {
+          // In a real implementation, we might want to redirect to login
+          // For now, just show an error message
+          const errorMessage: AIChatMessage = {
+            id: `msg_${Date.now()}_error`,
+            role: 'assistant',
+            content: response.error.message,
+            timestamp: new Date().toISOString(),
+            requiresConfirmation: false
+          };
+
+          setMessages(prev => [...prev, errorMessage]);
+        } else {
+          // Add error message
+          const errorMessage: AIChatMessage = {
+            id: `msg_${Date.now()}_error`,
+            role: 'assistant',
+            content: response.error?.message || 'Sorry, I encountered an error processing your request.',
+            timestamp: new Date().toISOString(),
+            requiresConfirmation: false
+          };
+
+          setMessages(prev => [...prev, errorMessage]);
+        }
+      }
+    } catch (error) {
+      console.error('Send message error:', error);
+
+      const errorMessage: AIChatMessage = {
+        id: `msg_${Date.now()}_error`,
+        role: 'assistant',
+        content: 'Sorry, I encountered an error connecting to the AI service.',
+        timestamp: new Date().toISOString(),
+        requiresConfirmation: false
+      };
+
+      setMessages(prev => [...prev, errorMessage]);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [isLoading, sessionId]);
+
+  return {
+    messages,
+    sendMessage,
+    isLoading,
+    requiresConfirmation,
+    handleConfirmation,
+    sessionId
+  };
+};
+```
+
+### frontend/src/services/ai.api.ts
+```typescript
+import { AIChatRequest, AIChatResponse, ConversationMessage } from '../types/ai.types';
+
+/**
+ * AI API Service
+ * Handles communication with the backend AI chat endpoint
+ */
+class AIApiService {
+  private baseUrl: string;
+
+  constructor() {
+    this.baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:5002/api/v1';
+  }
+
+  /**
+   * Send a chat message to the AI backend
+   */
+  async sendMessage(request: AIChatRequest): Promise<AIChatResponse> {
+    try {
+      const response = await fetch(`${this.baseUrl}/ai/chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include', // Include cookies for session-based auth
+        body: JSON.stringify(request)
+      });
+
+      if (!response.ok) {
+        // Handle specific HTTP errors
+        if (response.status === 401 || response.status === 403) {
+          // Authentication failed - session expired or invalid
+          return {
+            success: false,
+            error: {
+              code: 'AUTH_ERROR',
+              message: 'Authentication required. Please sign in again.'
+            }
+          };
+        }
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data: AIChatResponse = await response.json();
+      return data;
+    } catch (error) {
+      console.error('AI API Error:', error);
+      return {
+        success: false,
+        error: {
+          code: 'NETWORK_ERROR',
+          message: 'Failed to connect to AI service'
+        }
+      };
+    }
+  }
+
+  /**
+   * Convert AI response to conversation message format
+   */
+  convertToConversationMessage(aiResponse: AIChatResponse, userInput: string): ConversationMessage[] {
+    const messages: ConversationMessage[] = [];
+
+    // Add user message
+    messages.push({
+      id: `user-${Date.now()}`,
+      role: 'user',
+      content: userInput,
+      timestamp: new Date()
+    });
+
+    // Add AI response message if successful
+    if (aiResponse.success && aiResponse.data) {
+      messages.push({
+        id: `ai-${Date.now()}`,
+        role: 'ai',
+        content: aiResponse.data.responseText,
+        timestamp: new Date(),
+        requiresConfirmation: aiResponse.data.requiresConfirmation,
+        actionPlan: aiResponse.data.actionPlan
+      });
+    } else if (aiResponse.error) {
+      messages.push({
+        id: `ai-error-${Date.now()}`,
+        role: 'ai',
+        content: `Sorry, I encountered an error: ${aiResponse.error.message}`,
+        timestamp: new Date()
+      });
+    }
+
+    return messages;
+  }
+
+  /**
+   * Send confirmation for an action that requires it
+   */
+  async confirmAction(sessionId: string, actionId: string): Promise<AIChatResponse> {
+    try {
+      const response = await fetch(`${this.baseUrl}/ai/confirm`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include', // Include cookies for session-based auth
+        body: JSON.stringify({ sessionId, actionId })
+      });
+
+      if (!response.ok) {
+        // Handle specific HTTP errors
+        if (response.status === 401 || response.status === 403) {
+          // Authentication failed - session expired or invalid
+          return {
+            success: false,
+            error: {
+              code: 'AUTH_ERROR',
+              message: 'Authentication required. Please sign in again.'
+            }
+          };
+        }
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data: AIChatResponse = await response.json();
+      return data;
+    } catch (error) {
+      console.error('AI Confirmation API Error:', error);
+      return {
+        success: false,
+        error: {
+          code: 'CONFIRMATION_ERROR',
+          message: 'Failed to process confirmation'
+        }
+      };
+    }
+  }
+}
+
+// Export singleton instance
+export const aiApiService = new AIApiService();
+
+export default aiApiService;
+```
+
+### frontend/src/types/ai.types.ts
+```typescript
+/**
+ * AI Types for Frontend
+ * Defines TypeScript interfaces for AI-related frontend components
+ */
+
+// Interface for AI chat request
+export interface AIChatRequest {
+  message: string;
+  sessionId?: string;
+}
+
+// Interface for AI chat response
+export interface AIChatResponse {
+  success: boolean;
+  data?: {
+    responseText: string;
+    requiresConfirmation: boolean;
+    actionPlan: TaskOperationPlan[];
+    detectedIntent: UserIntent;
+  };
+  error?: {
+    code: string;
+    message: string;
+  };
+}
+
+// Interface for a planned task operation
+export interface TaskOperationPlan {
+  operation: TaskOperation;
+  endpoint: string;
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+  payload?: any;
+}
+
+// Enum for task operation types
+export enum TaskOperation {
+  CREATE = 'CREATE',
+  UPDATE = 'UPDATE',
+  DELETE = 'DELETE',
+  SEARCH = 'SEARCH',
+  MARK_COMPLETE = 'MARK_COMPLETE',
+  MARK_INCOMPLETE = 'MARK_INCOMPLETE'
+}
+
+// Enum for different types of user intents
+export enum IntentType {
+  CREATE_TASK = 'CREATE_TASK',
+  UPDATE_TASK = 'UPDATE_TASK',
+  DELETE_TASK = 'DELETE_TASK',
+  SEARCH_TASKS = 'SEARCH_TASKS',
+  MARK_COMPLETE = 'MARK_COMPLETE',
+  MARK_INCOMPLETE = 'MARK_INCOMPLETE',
+  SET_PRIORITY = 'SET_PRIORITY',
+  SET_DUE_DATE = 'SET_DUE_DATE',
+  SET_REMINDER = 'SET_REMINDER',
+  CREATE_RECURRING_TASK = 'CREATE_RECURRING_TASK'
+}
+
+// Enum for priority levels
+export enum PriorityLevel {
+  HIGH = 'HIGH',
+  MEDIUM = 'MEDIUM',
+  LOW = 'LOW'
+}
+
+// Enum for recurrence patterns
+export enum RecurrencePattern {
+  DAILY = 'DAILY',
+  WEEKLY = 'WEEKLY',
+  MONTHLY = 'MONTHLY'
+}
+
+// Interface for extracted parameters from user input
+export interface ExtractedParameters {
+  taskTitle?: string;
+  taskDescription?: string;
+  taskId?: string;
+  priority?: PriorityLevel;
+  dueDate?: string; // ISO date string
+  category?: string;
+  tags?: string[];
+  recurrencePattern?: RecurrencePattern;
+  reminderOffset?: number; // minutes before due date
+}
+
+// Interface for detected user intent
+export interface UserIntent {
+  type: IntentType;
+  confidence: number; // 0-1 scale
+  parameters: ExtractedParameters;
+}
+
+// Interface for AI response structure
+export interface FrontendAIResponse {
+  id: string;
+  userInput: string;
+  responseText: string;
+  requiresConfirmation: boolean;
+  timestamp: Date;
+}
+
+// Interface for AI chat message
+export interface AIChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: string; // ISO string format
+  requiresConfirmation?: boolean;
+  actionPlan?: TaskOperationPlan[];
+}
+
+// Interface for conversation message
+export interface ConversationMessage {
+  id: string;
+  role: 'user' | 'ai';
+  content: string;
+  timestamp: Date;
+  requiresConfirmation?: boolean;
+  actionPlan?: TaskOperationPlan[];
+}
+
+// Interface for AI conversation context
+export interface AIConversationContext {
+  sessionId: string;
+  userId: string;
+  lastInteraction: Date;
+  contextData?: any;
+}
+```
+
+### frontend/src/components/ChatMessage.tsx
+```typescript
+import React from 'react';
+import { ConversationMessage } from '../types/ai.types';
+
+interface ChatMessageProps {
+  message: {
+    id: string;
+    role: 'user' | 'assistant' | 'ai'; // Supporting both formats
+    content: string;
+    timestamp: string | Date; // Supporting both formats
+    requiresConfirmation?: boolean;
+    actionPlan?: any;
+  };
+  onConfirm?: (confirmed: boolean) => void;
+  isConfirming?: boolean;
+}
+
+const ChatMessage: React.FC<ChatMessageProps> = ({ message, onConfirm, isConfirming }) => {
+  const isUser = message.role === 'user';
+
+  return (
+    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-4`}>
+      <div
+        className={`max-w-xs md:max-w-md lg:max-w-lg xl:max-w-xl px-4 py-2 rounded-lg ${
+          isUser
+            ? 'bg-primary-600 text-white rounded-br-none'
+            : 'bg-dark-700 text-dark-200 rounded-bl-none border border-dark-600'
+        }`}
+      >
+        <div className="text-sm">{message.content}</div>
+        {message.requiresConfirmation && onConfirm && (
+          <div className="mt-2 space-y-2">
+            <div className="text-xs bg-yellow-500/20 text-yellow-300 p-2 rounded border border-yellow-500/30">
+              ⚠️ This action requires confirmation
+            </div>
+            <div className="flex space-x-2">
+              <button
+                onClick={() => onConfirm(true)}
+                disabled={isConfirming}
+                className="px-3 py-1 bg-green-600 text-white text-xs rounded hover:bg-green-700 disabled:opacity-50"
+              >
+                {isConfirming ? 'Confirming...' : 'Yes'}
+              </button>
+              <button
+                onClick={() => onConfirm(false)}
+                disabled={isConfirming}
+                className="px-3 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+        <div className="text-xs opacity-70 mt-1">
+          {typeof message.timestamp === 'string'
+            ? new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            : message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          }
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default ChatMessage;
+```
+
+### frontend/src/components/FloatingChatbot.tsx
+```typescript
+import React, { useState } from 'react';
+import AIChatContainer from '../containers/AIChatContainer';
+
+interface FloatingChatbotProps {
+  position?: 'bottom-right' | 'bottom-left';
+  onTasksUpdated?: () => void;
+}
+
+const FloatingChatbot: React.FC<FloatingChatbotProps> = ({ position = 'bottom-right', onTasksUpdated }) => {
+  const [isOpen, setIsOpen] = useState(false);
+
+  const getPositionClasses = () => {
+    switch (position) {
+      case 'bottom-left':
+        return 'bottom-6 left-6';
+      case 'bottom-right':
+      default:
+        return 'bottom-6 right-6';
+    }
+  };
+
+  return (
+    <div className={`fixed ${getPositionClasses()} z-50`}>
+      {isOpen ? (
+        <div className="flex flex-col items-end gap-3 w-80 h-[500px]">
+          <div className="w-full h-full">
+            <AIChatContainer onTasksUpdated={onTasksUpdated} />
+          </div>
+          <button
+            onClick={() => setIsOpen(false)}
+            className="w-12 h-12 rounded-full bg-red-500 hover:bg-red-600 text-white flex items-center justify-center shadow-lg transition-all duration-200 hover:scale-110 focus:outline-none focus:ring-2 focus:ring-red-400 focus:ring-offset-2 focus:ring-offset-dark-900"
+            aria-label="Close chat"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+      ) : (
+        <button
+          onClick={() => setIsOpen(true)}
+          className="w-14 h-14 rounded-full bg-gradient-to-r from-primary-600 to-primary-500 hover:from-primary-500 hover:to-primary-400 text-white flex items-center justify-center shadow-lg transition-all duration-200 hover:scale-110 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 focus:ring-offset-dark-900"
+          aria-label="Open AI assistant"
+        >
+          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+          </svg>
+        </button>
+      )}
+    </div>
+  );
+};
+
+export default FloatingChatbot;
+```

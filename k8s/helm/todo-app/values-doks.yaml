@@ -1,0 +1,77 @@
+## DOKS Production Overrides
+## Generated from spec: 008-phase5-advanced-cloud-deployment
+
+frontend:
+  replicaCount: 2
+  image:
+    repository: registry.digitalocean.com/<registry>/todo-frontend
+    tag: latest
+    pullPolicy: Always
+  service:
+    type: ClusterIP
+    port: 80
+
+backend:
+  replicaCount: 2
+  image:
+    repository: registry.digitalocean.com/<registry>/todo-backend
+    tag: latest
+    pullPolicy: Always
+  service:
+    type: ClusterIP
+    port: 4000
+  containerPort: 4000
+  dapr:
+    enabled: true
+    appId: backend
+    appPort: 4000
+  hpa:
+    enabled: true
+
+aiAgent:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: registry.digitalocean.com/<registry>/todo-ai-agent
+    tag: latest
+    pullPolicy: Always
+  service:
+    type: ClusterIP
+    port: 5000
+  containerPort: 5000
+  dapr:
+    enabled: true
+    appId: ai-agent
+    appPort: 5000
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+postgres:
+  enabled: false
+
+ingress:
+  enabled: true
+  className: nginx
+  hosts:
+    - host: ""
+      paths:
+        - path: /api(/|$)(.*)
+          pathType: ImplementationSpecific
+          service: backend
+          port: 4000
+        - path: /(.*)
+          pathType: ImplementationSpecific
+          service: frontend
+          port: 80
+
+secrets:
+  enabled: true
+  todoAppSecrets: todo-app-secrets
+  kafkaCreds: kafka-creds
+
+namespace: todo-app

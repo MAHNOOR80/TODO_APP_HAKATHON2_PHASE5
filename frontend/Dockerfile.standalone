@@ -1,0 +1,13 @@
+# Use the existing image as base and modify the nginx configuration
+FROM mahnoornaveed123/todo_frontend
+
+# Create a new nginx configuration that doesn't depend on backend service
+RUN sed -i '/location \/api\/ \{/,/}/ {
+    /location \/api\/ \{/!{
+        /}/!d
+    }
+}' /etc/nginx/nginx.conf && \
+    # Add a simple API fallback that returns a meaningful error
+    sed -i '/location \/api\/ \{/a\        return 404 '\''{"error":"API endpoint not available in standalone mode","message":"Backend service not connected"}'\'';\n        add_header Content-Type application/json;' /etc/nginx/nginx.conf
+
+EXPOSE 3000

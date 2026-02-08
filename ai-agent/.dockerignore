@@ -1,0 +1,42 @@
+# Node modules
+node_modules/
+npm-debug.log*
+
+# Build output (we build fresh in container)
+dist/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Git
+.git/
+.gitignore
+
+# IDE and Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Testing
+coverage/
+tests/
+*.test.ts
+*.spec.ts
+jest.config.*
+
+# Documentation
+*.md
+!README.md
+
+# Logs
+*.log
+logs/
+
+# Miscellaneous
+.DS_Store
+Thumbs.db
+*.tmp

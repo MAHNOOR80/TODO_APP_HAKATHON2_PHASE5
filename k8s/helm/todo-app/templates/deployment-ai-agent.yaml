@@ -1,0 +1,83 @@
+{{- if .Values.aiAgent.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: todo-app-ai-agent
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: todo-app-ai-agent
+    app.kubernetes.io/name: {{ .Chart.Name }}
+    app.kubernetes.io/component: ai-agent
+    app.kubernetes.io/version: {{ .Chart.AppVersion }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  replicas: {{ .Values.aiAgent.replicaCount }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: todo-app-ai-agent
+  template:
+    metadata:
+      labels:
+        app: todo-app-ai-agent
+      {{- if .Values.aiAgent.dapr.enabled }}
+      annotations:
+        dapr.io/enabled: "true"
+        dapr.io/app-id: "{{ .Values.aiAgent.dapr.appId }}"
+        dapr.io/app-port: "{{ .Values.aiAgent.containerPort }}"
+      {{- end }}
+    spec:
+      containers:
+        - name: ai-agent
+          image: "{{ .Values.aiAgent.image.repository }}:{{ .Values.aiAgent.image.tag }}"
+          imagePullPolicy: {{ .Values.aiAgent.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.aiAgent.containerPort }}
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: todo-config
+          {{- if .Values.secrets.enabled }}
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.todoAppSecrets }}
+                  key: DATABASE_URL
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.todoAppSecrets }}
+                  key: OPENAI_API_KEY
+            - name: AUTH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.todoAppSecrets }}
+                  key: AUTH_SECRET
+          {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.aiAgent.containerPort }}
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.aiAgent.containerPort }}
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: {{ .Values.aiAgent.resources.requests.cpu }}
+              memory: {{ .Values.aiAgent.resources.requests.memory }}
+            limits:
+              cpu: {{ .Values.aiAgent.resources.limits.cpu }}
+              memory: {{ .Values.aiAgent.resources.limits.memory }}
+{{- end }}

@@ -1,0 +1,22 @@
+{{- if .Values.aiAgent.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: todo-app-ai-agent
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: todo-app-ai-agent
+    app.kubernetes.io/name: {{ .Chart.Name }}
+    app.kubernetes.io/component: ai-agent
+    app.kubernetes.io/version: {{ .Chart.AppVersion }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.aiAgent.service.port }}
+      targetPort: {{ .Values.aiAgent.containerPort }}
+      protocol: TCP
+      name: http
+  selector:
+    app: todo-app-ai-agent
+{{- end }}
