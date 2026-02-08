@@ -1,59 +1,79 @@
-# Full-Stack Todo Web Application - Phase 2
+# Full-Stack Todo Web Application - Phase 5
 
-A production-ready, full-stack todo application with authentication, persistent storage, and responsive web UI. This is Phase 2 of the Todo Application project, transforming the Phase 1 CLI application into a complete web-based solution.
+A production-grade, full-stack todo application with authentication, AI-powered task management, autonomous agents, and advanced cloud-native deployment on DigitalOcean Kubernetes (DOKS) with event-driven architecture. This is Phase 5 of the Todo Application project, evolving from a CLI tool into a distributed, event-driven cloud system.
 
 ## Overview
 
-This full-stack web application enables authenticated users to manage their tasks through an intuitive web interface with complete feature parity from Phase 1.
+This application enables authenticated users to manage tasks through a responsive web UI and an AI conversational assistant, backed by autonomous agents that provide proactive suggestions. The system is deployed on Kubernetes with Kafka-based event-driven decoupling via Dapr sidecars.
 
-### Phase 2 Transformation
+### Evolution
 
-**From Phase 1 (CLI):**
-- ❌ In-memory storage → ✅ PostgreSQL persistence (Neon Serverless)
-- ❌ Single-user CLI → ✅ Multi-user web app with authentication (Better Auth)
-- ❌ Python CLI → ✅ TypeScript full-stack (Node.js backend + React frontend)
-- ❌ Local execution → ✅ RESTful API with responsive web UI
+| Phase | Focus | Stack |
+|-------|-------|-------|
+| Phase 1 | CLI Task Manager | Python, in-memory storage |
+| Phase 2 | Full-Stack Web App | TypeScript, React, Express, PostgreSQL, Better Auth |
+| Phase 3 | AI Assistant + Premium Homepage | OpenAI-powered chatbot, animated landing page |
+| Phase 4 | Cloud-Native Deployment | Docker, Kubernetes (Minikube), Helm, autonomous AI agents |
+| **Phase 5** | **Advanced Cloud + Event-Driven** | **DOKS, Kafka, Dapr sidecars, reactive AI agents** |
 
 ## Features
 
-### 100% Feature Parity with Phase 1
+### Core Task Management (Phase 1-2)
 
-**Basic Level (User Story 1-2):**
-- ✅ User authentication (signup, signin, signout)
-- ✅ Create tasks with title and description
-- ✅ View all user tasks
-- ✅ Update task details
-- ✅ Delete tasks
-- ✅ Mark tasks as complete/incomplete
+- User authentication (signup, signin, signout) with session-based auth
+- Full CRUD: create, read, update, delete tasks
+- Mark tasks as complete/incomplete
+- Priority levels (High/Medium/Low)
+- Tags and categories for organization
+- Search by keyword, filter by status/priority/tag, sort by title/priority/due date
+- Due dates with overdue indicators
+- Recurring tasks (daily/weekly/monthly)
+- Task reminders with browser notifications
 
-**Intermediate Level (User Story 3-4):**
-- ✅ Assign priority levels (High/Medium/Low)
-- ✅ Tag tasks for organization
-- ✅ Search tasks by keyword
-- ✅ Filter by completion status, priority, or tag
-- ✅ Sort by title, priority, or due date
+### Premium Homepage (Phase 3)
 
-**Advanced Level (User Story 5-7):**
-- ✅ Set due dates with overdue indicators
-- ✅ Recurring tasks (daily/weekly/monthly)
-- ✅ Task reminders with browser notifications
-
-### New Phase 2 Capabilities
-
-- 🔐 **Secure Authentication**: Session-based auth with Better Auth
-- 💾 **Persistent Storage**: PostgreSQL database with user data isolation
-- 🌐 **Responsive Design**: Mobile, tablet, and desktop support
-- ♿ **Accessibility**: WCAG AA compliance
-- 🚀 **Performance**: <2s page load, <1s search/filter
-- 🔒 **Security**: Input validation, SQL injection prevention, XSS protection, CSRF protection
+- Animated hero section with clear value proposition
+- Feature showcase cards with hover effects
+- Responsive navigation bar with smooth scroll
+- Mobile-first responsive design
+- CTA buttons for sign-up/sign-in conversion
+- Micro-interactions and engaging animations
 
 ### AI-Powered Todo Assistant (Phase 3)
 
-- 🤖 **Natural Language Processing**: Create and manage tasks using conversational language
-- 🧠 **Intent Recognition**: Automatically detects create, update, delete, and status change operations
-- 💬 **Context-Aware Conversations**: Maintains conversation context and understands references like "it" or "that task"
-- ⚠️ **Safety Flows**: Confirmation required for destructive operations like task deletion
-- 🔄 **Multi-turn Conversations**: Handles follow-up commands and task chaining
+- Natural language task management ("Create a task to buy groceries tomorrow")
+- Intent recognition for create, update, delete, and status change operations
+- Context-aware multi-turn conversations
+- Safety flows with confirmation for destructive operations
+- Full feature parity with traditional UI through conversational interface
+
+### Autonomous AI Agents (Phase 4)
+
+- Proactive task suggestions (overdue reminders, prioritization recommendations)
+- Background agent service with scheduled analysis
+- Suggestions panel in the dashboard
+- User-configurable suggestion preferences
+
+### Cloud-Native Infrastructure (Phase 4)
+
+- Docker containerization for all services (backend, frontend, ai-agent)
+- Kubernetes deployment with Helm charts
+- Health checks (liveness/readiness probes) on all services
+- Structured JSON logging with request correlation IDs
+- Horizontal Pod Autoscaling (HPA)
+- Local development with Minikube
+
+### Advanced Cloud Deployment (Phase 5)
+
+- DigitalOcean Kubernetes (DOKS) deployment with parameterized Helm values
+- Dapr sidecar injection on all services for service mesh capabilities
+- Kafka-backed event-driven architecture via Dapr pub/sub
+- Task lifecycle events (`tasks.created`, `tasks.updated`, `tasks.deleted`, `tasks.completed`, `tasks.incomplete`)
+- Reactive AI agents subscribing to Kafka events for near-real-time suggestions
+- NGINX Ingress Controller for public access with path-based routing
+- Kubernetes Secrets management (no secrets in ConfigMaps or pod specs)
+- Dapr resiliency policies for fault-tolerant event publishing
+- Idempotent event processing with at-least-once delivery guarantees
 
 ## Architecture
 
@@ -78,47 +98,101 @@ This full-stack web application enables authenticated users to manage their task
 - State Management: React Context + Hooks
 - Testing: Vitest + React Testing Library
 
+**AI Agent:**
+- Language: TypeScript
+- Runtime: Node.js 20+
+- AI Provider: OpenAI API
+- ORM: Prisma (shared schema)
+- Background Processing: Scheduled intervals + event-driven (Dapr pub/sub)
+
+**Infrastructure:**
+- Containerization: Docker (multi-stage builds)
+- Orchestration: Kubernetes (DOKS / Minikube)
+- Package Manager: Helm 3
+- Service Mesh: Dapr sidecars
+- Event Streaming: Kafka (DigitalOcean Managed / local)
+- Ingress: NGINX Ingress Controller
+- Secrets: Kubernetes Secrets
+- CI/CD: Docker Compose (dev), Helm (prod)
+
 ### Project Structure
 
 ```
-TODO_APP_PHASE2/
+TODO_APP_PHASE5/
 ├── backend/               # REST API Server
 │   ├── src/
 │   │   ├── config/        # Database, auth config
-│   │   ├── middleware/    # Auth, validation, error handling
-│   │   ├── routes/        # API endpoints (auth, tasks)
-│   │   ├── services/      # Business logic
-│   │   ├── repositories/  # Database access
-│   │   ├── models/        # TypeScript interfaces
-│   │   ├── validators/    # Input validation schemas
-│   │   ├── utils/         # Helper functions
-│   │   └── index.ts       # Server entry point
-│   ├── tests/             # Backend tests
-│   ├── .env.example       # Environment variables template
-│   ├── package.json       # Backend dependencies
-│   └── tsconfig.json      # TypeScript config (strict mode)
+│   │   ├── middleware/     # Auth, validation, error handling
+│   │   ├── routes/         # API endpoints (auth, tasks, AI chat)
+│   │   ├── services/       # Business logic + event publishing
+│   │   ├── repositories/   # Database access
+│   │   ├── models/         # TypeScript interfaces
+│   │   ├── validators/     # Input validation schemas
+│   │   ├── utils/          # Helper functions
+│   │   └── index.ts        # Server entry point
+│   ├── Dockerfile          # Multi-stage container build
+│   ├── .env.example        # Environment variables template
+│   ├── package.json
+│   └── tsconfig.json
 │
 ├── frontend/              # Web UI
 │   ├── src/
-│   │   ├── components/    # Reusable UI components
-│   │   ├── containers/    # Data-fetching containers
-│   │   ├── pages/         # Page components
-│   │   ├── hooks/         # Custom React hooks
-│   │   ├── services/      # API client
-│   │   ├── types/         # TypeScript types
-│   │   ├── context/       # React Context providers
-│   │   ├── utils/         # Helper functions
-│   │   └── App.tsx        # Root component
-│   ├── tests/             # Frontend tests
-│   ├── .env.example       # Environment variables template
-│   ├── package.json       # Frontend dependencies
-│   └── tsconfig.json      # TypeScript config (strict mode)
+│   │   ├── components/     # Reusable UI components
+│   │   ├── containers/     # Data-fetching containers
+│   │   ├── pages/          # HomePage, DashboardPage, Signin, Signup
+│   │   ├── hooks/          # Custom React hooks
+│   │   ├── services/       # API client
+│   │   ├── types/          # TypeScript types
+│   │   ├── context/        # React Context providers
+│   │   ├── utils/          # Helper functions
+│   │   └── App.tsx         # Root component
+│   ├── Dockerfile          # Multi-stage container build
+│   ├── .env.example
+│   ├── package.json
+│   └── tsconfig.json
 │
-└── specs/                 # Documentation
-    └── 004-fullstack-todo-web-app/
-        ├── spec.md        # Feature specification
-        ├── plan.md        # Implementation plan
-        └── tasks.md       # Task breakdown
+├── ai-agent/              # Autonomous AI Agent Service
+│   ├── src/                # Agent logic, schedulers, event subscribers
+│   ├── prisma/             # Shared database schema
+│   ├── Dockerfile          # Container build
+│   ├── package.json
+│   └── tsconfig.json
+│
+├── k8s/                   # Kubernetes Configuration
+│   ├── helm/
+│   │   └── todo-app/       # Helm chart
+│   │       ├── Chart.yaml
+│   │       ├── values.yaml          # Default values (Minikube)
+│   │       ├── values-doks.yaml     # DOKS-specific overrides
+│   │       └── templates/           # K8s manifest templates
+│   ├── dapr/
+│   │   ├── pubsub-kafka.yaml        # Dapr Kafka pub/sub component
+│   │   └── resiliency.yaml          # Dapr resiliency policies
+│   └── secrets/
+│       ├── secrets.yaml.example     # Secret template
+│       └── secrets.yaml             # Actual secrets (gitignored)
+│
+├── scripts/               # Deployment scripts
+│   ├── deploy-minikube.sh           # Local Minikube deployment
+│   ├── deploy-minikube.ps1          # PowerShell variant
+│   └── phase4_deploy.sh             # Phase 4 deployment script
+│
+├── docker-compose.yaml    # Local multi-service orchestration
+├── docker-compose.override.yaml  # Development overrides
+│
+├── specs/                 # Feature Specifications
+│   ├── 001-todo-cli/
+│   ├── 002-intermediate-level/
+│   ├── 003-advanced-level/
+│   ├── 004-fullstack-todo-web-app/
+│   ├── 005-premium-homepage/
+│   ├── 006-ai-todo-assistant/
+│   ├── 007-cloud-native-k8s-deployment/
+│   └── 008-phase5-advanced-cloud-deployment/
+│
+├── src/                   # Phase 1 CLI (Python, legacy)
+├── docs/                  # Additional documentation
+└── history/               # Prompt history records & ADRs
 ```
 
 ### Layered Architecture
@@ -126,7 +200,7 @@ TODO_APP_PHASE2/
 **Backend (4 Layers):**
 1. **HTTP Layer**: Route handlers, request/response formatting
 2. **Middleware Layer**: Authentication, validation, error handling
-3. **Business Logic Layer**: Services for task operations, recurrence, reminders
+3. **Business Logic Layer**: Services for task operations, recurrence, reminders, event publishing
 4. **Data Access Layer**: Repositories with ORM queries, user isolation
 
 **Frontend (Container/Presentational Pattern):**
@@ -134,79 +208,119 @@ TODO_APP_PHASE2/
 - **Presentational Components**: Props + rendering only
 - **Separation**: UI decoupled from business logic and API calls
 
+**Event-Driven Layer (Phase 5):**
+- Task lifecycle operations publish events to Kafka via Dapr pub/sub
+- AI agents subscribe to events for near-real-time reactive suggestions
+- Dapr sidecars handle event routing, retries, and resiliency
+- At-least-once delivery with idempotent processing
+
 ## Requirements
 
 - Node.js 20+ LTS
 - npm or pnpm
-- Neon PostgreSQL database (free tier available at [neon.tech](https://neon.tech))
+- Docker Desktop (for containerized deployment)
+- Neon PostgreSQL database (free tier at [neon.tech](https://neon.tech))
+
+**For Kubernetes deployment (Phase 4+):**
+- Minikube (local) or DOKS cluster (production)
+- kubectl
+- Helm 3+
+- Dapr CLI (Phase 5)
 
 ## Setup
 
-### 1. Clone and Navigate
+### Option 1: Local Development
 
-```bash
-cd TODO_APP_PHASE2
-```
-
-### 2. Neon PostgreSQL Setup
-
-Before setting up the backend, you need to create a Neon PostgreSQL database:
+#### 1. Neon PostgreSQL Setup
 
 1. Sign up at [neon.tech](https://neon.tech) (free tier available)
 2. Create a new project in the Neon dashboard
-3. Copy your connection string from the project dashboard
+3. Copy your connection string
 4. Update `backend/.env` with your Neon connection string
 
 For detailed setup instructions, see [docs/neon-postgres-setup.md](docs/neon-postgres-setup.md).
 
-### 3. Backend Setup
+#### 2. Backend Setup
 
 ```bash
 cd backend
-
-# Install dependencies
 npm install
-
-# Run database migrations
 npx prisma migrate dev
-
-# Start development server
 npm run dev
 ```
 
-Backend server runs on `http://localhost:3000`
+Backend server runs on `http://localhost:4000`
 
-### 4. Frontend Setup
+#### 3. Frontend Setup
 
 ```bash
 cd frontend
-
-# Install dependencies
 npm install
-
-# Start development server
 npm run dev
 ```
 
 Frontend dev server runs on `http://localhost:5173`
 
-### 5. Access the Application
+#### 4. AI Agent Setup
 
-Open browser: `http://localhost:5173`
+```bash
+cd ai-agent
+npm install
+npm run dev
+```
 
-1. Create account (signup)
-2. Sign in
-3. Start managing tasks!
+AI Agent runs on `http://localhost:5000`
+
+### Option 2: Docker Compose
+
+```bash
+# Start all services
+docker-compose up --build
+
+# Services:
+#   Frontend:  http://localhost:3000
+#   Backend:   http://localhost:4000
+#   AI Agent:  http://localhost:5000
+#   Database:  localhost:5432
+```
+
+### Option 3: Kubernetes (Minikube)
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for the full Helm-based Kubernetes deployment guide.
+
+```bash
+# Quick start
+minikube start --cpus=4 --memory=8192 --driver=docker
+minikube addons enable ingress
+minikube addons enable metrics-server
+
+# Deploy with Helm
+helm upgrade --install todo-app ./k8s/helm/todo-app
+```
+
+### Option 4: DOKS (Phase 5 Production)
+
+```bash
+# Configure DOKS kubeconfig
+doctl kubernetes cluster kubeconfig save <cluster-name>
+
+# Install Dapr
+dapr init -k
+
+# Apply Dapr components
+kubectl apply -f k8s/dapr/pubsub-kafka.yaml
+kubectl apply -f k8s/dapr/resiliency.yaml
+
+# Apply secrets
+kubectl apply -f k8s/secrets/secrets.yaml
+
+# Deploy with DOKS values
+helm upgrade --install todo-app ./k8s/helm/todo-app -f k8s/helm/todo-app/values-doks.yaml
+```
 
 ## AI Assistant Usage
 
 The AI-Powered Todo Assistant is integrated into the dashboard and allows you to manage your tasks using natural language.
-
-### How to Use
-
-1. Navigate to the Dashboard page after signing in
-2. Locate the AI Chat Assistant panel on the right side of the screen
-3. Type your natural language commands in the input box
 
 ### Supported Commands
 
@@ -227,14 +341,14 @@ The AI-Powered Todo Assistant is integrated into the dashboard and allows you to
 
 **Contextual References:**
 - "Set it to high priority" (referring to the last mentioned task)
-- "Mark that task as complete" (using "that task" to reference)
-- "Update the previous task" (using "previous task" to reference)
+- "Mark that task as complete"
+- "Update the previous task"
 
 ### Safety Features
 
-- **Confirmation Required**: All destructive operations (deletions, marking complete/incomplete) require confirmation
-- **Natural Language Validation**: The AI validates your intent before executing operations
-- **User Isolation**: Tasks are securely isolated by user account
+- Confirmation required for all destructive operations
+- Natural language validation before execution
+- User data isolation enforced
 
 ## API Documentation
 
@@ -257,10 +371,10 @@ The AI-Powered Todo Assistant is integrated into the dashboard and allows you to
 
 ### AI Assistant Endpoints (Require Authentication)
 
-- `POST /api/v1/ai/chat` - Process natural language commands for task management
-  - **Request Body**: `{ "message": "natural language command", "sessionId": "conversation session id" }`
+- `POST /api/v1/ai/chat` - Process natural language commands
+  - **Request**: `{ "message": "...", "sessionId": "..." }`
   - **Response**: AI-processed intent with action plan
-  - **Safety**: Confirmation required for destructive operations
+  - Confirmation required for destructive operations
 
 ### Query Parameters (GET /api/v1/tasks)
 
@@ -314,7 +428,6 @@ CREATE INDEX idx_tasks_completed ON tasks(completed);
 
 ```bash
 cd backend
-
 npm run dev          # Start development server with hot reload
 npm run build        # Build for production
 npm run start        # Run production build
@@ -329,7 +442,6 @@ npm run format       # Format code with Prettier
 
 ```bash
 cd frontend
-
 npm run dev          # Start development server with hot reload
 npm run build        # Build for production
 npm run preview      # Preview production build
@@ -340,6 +452,15 @@ npm run lint:fix     # Fix linting issues
 npm run format       # Format code with Prettier
 ```
 
+### Docker Commands
+
+```bash
+docker-compose up --build          # Build and start all services
+docker-compose down                # Stop all services
+docker-compose logs -f backend     # Follow backend logs
+docker-compose logs -f ai-agent    # Follow AI agent logs
+```
+
 ## Testing
 
 ### Backend Tests
@@ -347,28 +468,16 @@ npm run format       # Format code with Prettier
 ```bash
 cd backend
 npm test
-
-# Coverage report
 npm run test:coverage
 ```
-
-**Test Types:**
-- Unit tests: Services, repositories, utilities
-- Integration tests: API endpoints with auth
 
 ### Frontend Tests
 
 ```bash
 cd frontend
 npm test
-
-# Coverage report
 npm run test:coverage
 ```
-
-**Test Types:**
-- Component tests: React components
-- Integration tests: User flows (signup, task creation)
 
 ## Security
 
@@ -376,7 +485,6 @@ npm run test:coverage
 - Session-based auth with httpOnly cookies
 - CSRF protection enabled
 - Password hashing via Better Auth
-- No plaintext passwords stored
 
 ### API Security
 - All `/api/v1/tasks/*` endpoints require authentication
@@ -385,32 +493,34 @@ npm run test:coverage
 - ORM parameterized queries (SQL injection prevention)
 - Output sanitization (XSS prevention)
 
-### Environment Security
-- Secrets in `.env` (never committed)
-- `.env.example` templates provided
-- `.gitignore` configured
+### Infrastructure Security
+- Kubernetes Secrets for all sensitive values (DATABASE_URL, AUTH_SECRET, OPENAI_API_KEY, kafka-creds)
+- No secrets exposed in ConfigMaps or pod environment listings
+- `.env` files never committed
+- TLS support via NGINX Ingress
 
 ## Performance
 
-### Target Metrics (Phase 2 Constitution)
-- ✅ Page load: <2s for 500 tasks
-- ✅ Search/filter: <1s for 1000 tasks
-- ✅ Task creation: <10s end-to-end
-- ✅ API response: <200ms p95
-- ✅ Bundle size: <500KB gzipped
+### Target Metrics
+- Page load: <2s for 500 tasks
+- Search/filter: <1s for 1000 tasks
+- Task creation: <10s end-to-end
+- API response: <200ms p95
+- Bundle size: <500KB gzipped
 
 ### Scale
-- 100 concurrent authenticated users
+- Horizontal Pod Autoscaling for backend and frontend
+- 100+ concurrent authenticated users
 - Up to 10,000 tasks per user
-- Pagination/virtual scrolling for large lists
+- Replica counts: >=2 backend, >=2 frontend, >=1 ai-agent (DOKS)
 
 ## Accessibility
 
-- ✅ WCAG AA compliance
-- ✅ Keyboard navigation support
-- ✅ ARIA labels on interactive elements
-- ✅ 44x44px minimum touch targets (mobile)
-- ✅ Screen reader compatible
+- WCAG AA compliance
+- Keyboard navigation support
+- ARIA labels on interactive elements
+- 44x44px minimum touch targets (mobile)
+- Screen reader compatible
 
 ## Browser Support
 
@@ -419,60 +529,27 @@ npm run test:coverage
 - Safari 14+
 - Edge 90+
 
-## Deployment
-
-### Backend Deployment
-
-1. Set environment variables in hosting platform:
-   - `DATABASE_URL` (Neon PostgreSQL connection string)
-   - `AUTH_SECRET` (strong random secret)
-   - `PORT` (default: 3000)
-   - `NODE_ENV=production`
-
-2. Build and start:
-   ```bash
-   npm run build
-   npm start
-   ```
-
-### Frontend Deployment
-
-1. Set build-time environment variable:
-   - `VITE_API_URL` (backend API URL)
-
-2. Build:
-   ```bash
-   npm run build
-   ```
-
-3. Deploy `dist/` directory to static hosting (Vercel, Netlify, etc.)
-
 ## Documentation
 
-- **Specification**: `specs/004-fullstack-todo-web-app/spec.md`
-- **Implementation Plan**: `specs/004-fullstack-todo-web-app/plan.md`
-- **Task Breakdown**: `specs/004-fullstack-todo-web-app/tasks.md`
+- **Specifications**: `specs/` directory (001 through 008)
+- **Deployment Guide**: [DEPLOYMENT.md](DEPLOYMENT.md)
+- **Deployment Config**: [DEPLOYMENT_CONFIG.md](DEPLOYMENT_CONFIG.md)
 - **Constitution**: `.specify/memory/constitution.md`
-
-## Phase 1 (CLI) Reference
-
-Phase 1 CLI application is available in `src/` directory (Python-based). See Phase 1 documentation for CLI usage.
+- **Neon Setup**: [docs/neon-postgres-setup.md](docs/neon-postgres-setup.md)
 
 ## Contributing
 
-This project follows Phase 2 Constitution v2.0.0 principles:
+This project follows the Phase 5 Constitution v5.0.0 principles:
 1. Simplicity and Readability First
 2. Clean Code Principles
 3. Modularity and Extensibility
 4. Security First
 5. API-First Design
+6. Event-Driven Decoupling
+7. Spec-Driven Development
 
 See `.specify/memory/constitution.md` for complete guidelines.
 
 ## License
 
-Copyright © 2025. All rights reserved.
-
-## Support
-
-For issues or questions, please refer to the specification documents in `specs/004-fullstack-todo-web-app/`.
+Copyright 2025-2026. All rights reserved.
